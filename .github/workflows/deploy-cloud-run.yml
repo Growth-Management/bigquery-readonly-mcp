@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   REGION: asia-northeast1
   SERVICE: bigquery-readonly-mcp
   ARTIFACT_REGISTRY_REPOSITORY: bigquery-readonly-mcp
