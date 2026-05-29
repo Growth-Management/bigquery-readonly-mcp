@@ -5,7 +5,7 @@ BigQuery Readonly MCP is a FastAPI-based Custom MCP server for safely querying B
 ## Scope
 
 - GitHub repository: `Growth-Management/bigquery-readonly-mcp`
-- Cloud Run deploy project: `bigquery-mcp-prod`
+- Cloud Run deploy project: `ice-sh`
 - Initial BigQuery validation project: `ice-sh`
 - Allowed email domain: `impress.co.jp`
 - Default `maximumBytesBilled`: 1GB
@@ -80,7 +80,7 @@ pytest
 
 ## OAuth Setup
 
-Configure a Google OAuth Web application in `bigquery-mcp-prod`:
+Configure a Google OAuth Web application in `ice-sh`:
 
 - Consent screen: internal or equivalent organization-limited configuration
 - Authorized domain: `impress.co.jp`
@@ -101,12 +101,14 @@ Store these values in Secret Manager rather than the repository:
 
 The GitHub Actions workflow expects these GitHub Secrets:
 
-- `GCP_PROJECT_ID`: `bigquery-mcp-prod`
+- `GCP_PROJECT_ID`: `ice-sh`
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`
 - `GCP_DEPLOY_SERVICE_ACCOUNT`
 - `BASE_URL`: deployed Cloud Run URL or custom domain
 
 The deploy service account needs only deployment permissions, such as Artifact Registry write and Cloud Run deploy permissions. It is not used for BigQuery query execution.
+
+Deployment is managed per GCP project. The initial deployment target is `ice-sh`; when this MCP is rolled out to another project, create that project's own Cloud Run service, Artifact Registry repository, Secret Manager secrets, Workload Identity Federation bindings, and GitHub Secrets.
 
 See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment procedure, including required APIs, Artifact Registry, Secret Manager, manual deploy, `/healthz`, and Cloud Logging checks.
 
