@@ -182,4 +182,4 @@ Expected response:
 - Deploy service account has Artifact Registry and Cloud Run deploy permissions.
 - GitHub Secrets are set.
 - GitHub Actions deploy workflow completes successfully from `main`.
-- Cloud Run `/healthz` succeeds after deploy.
+- Cloud Run `/health` succeeds after deploy.
