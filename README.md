@@ -110,6 +110,8 @@ The deploy service account needs only deployment permissions, such as Artifact R
 
 See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment procedure, including required APIs, Artifact Registry, Secret Manager, manual deploy, `/healthz`, and Cloud Logging checks.
 
+See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the preferred GitHub Actions deployment path using Workload Identity Federation.
+
 ## Initial Validation On ice-sh
 
 Use a user account in the allowed domain with the required BigQuery IAM permissions, then verify:
@@ -160,3 +162,4 @@ jsonPayload.project_id="ice-sh"
 - Phase 3: readonly SQL guard, `maximumBytesBilled`, `max_results`, timeout, basic query error handling
 - Phase 4: structured JSON audit logs are emitted to stdout for Cloud Logging ingestion
 - Phase 5 prep: Docker, env example, Secret Manager policy, and Cloud Run deployment procedure are documented; live deploy and `/healthz` verification still require a `gcloud` environment
+- Phase 6 prep: GitHub Actions workflow exists; Workload Identity Federation, IAM, and GitHub Secrets setup are documented
