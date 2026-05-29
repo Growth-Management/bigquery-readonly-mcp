@@ -107,8 +107,10 @@ For the preferred GitHub Actions deployment path, see [`github-actions-deploy.md
 
 ## Health Check
 
+Cloud Run reserves `/healthz` before the request reaches the container, so use `/health` for external service checks.
+
 ```bash
-curl -fsS "https://<cloud-run-url>/healthz"
+curl -fsS "https://<cloud-run-url>/health"
 ```
 
 Expected response:
@@ -152,7 +154,7 @@ jsonPayload.project_id="ice-sh"
 ## Phase 5 Done Criteria
 
 - Cloud Run service deploy succeeds.
-- `https://<cloud-run-url>/healthz` returns `{"status":"ok"}`.
+- `https://<cloud-run-url>/health` returns `{"status":"ok"}`.
 - HTTPS endpoint is registered as OAuth redirect URI.
 - Secret values are supplied from Secret Manager.
 - Cloud Logging receives app logs from the service.
