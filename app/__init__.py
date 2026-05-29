@@ -1,0 +1,1 @@
+"""BigQuery readonly MCP server."""
