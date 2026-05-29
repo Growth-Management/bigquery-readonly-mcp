@@ -5,11 +5,13 @@ This guide covers the Phase 6 setup for deploying `Growth-Management/bigquery-re
 ## Fixed Defaults
 
 - GitHub repository: `Growth-Management/bigquery-readonly-mcp`
-- Deploy project: `bigquery-mcp-prod`
+- Deploy project: `ice-sh`
 - Region: `asia-northeast1`
 - Cloud Run service: `bigquery-readonly-mcp`
 - Artifact Registry repository: `bigquery-readonly-mcp`
 - Initial BigQuery validation project: `ice-sh`
+
+Deployment is managed per GCP project. This guide uses `ice-sh` for the initial deployment. For another project, create a separate deploy service account, WIF binding, Artifact Registry repository, Secret Manager secrets, Cloud Run service, and GitHub Secrets for that project.
 
 ## GitHub Secrets
 
@@ -17,7 +19,7 @@ Set these repository secrets in `Growth-Management/bigquery-readonly-mcp`:
 
 | Secret | Value |
 | --- | --- |
-| `GCP_PROJECT_ID` | `bigquery-mcp-prod` |
+| `GCP_PROJECT_ID` | `ice-sh` |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full Workload Identity Provider resource name |
 | `GCP_DEPLOY_SERVICE_ACCOUNT` | Deploy service account email |
 | `BASE_URL` | Cloud Run URL or custom domain |
@@ -31,7 +33,7 @@ projects/<project-number>/locations/global/workloadIdentityPools/github-actions/
 Example deploy service account:
 
 ```text
-github-actions-bigquery-mcp@bigquery-mcp-prod.iam.gserviceaccount.com
+github-actions-bigquery-mcp@ice-sh.iam.gserviceaccount.com
 ```
 
 ## Service Accounts
@@ -48,13 +50,13 @@ Neither service account should be used to run BigQuery queries on behalf of user
 ```bash
 gcloud iam service-accounts create github-actions-bigquery-mcp \
   --display-name="GitHub Actions BigQuery MCP deploy" \
-  --project bigquery-mcp-prod
+  --project ice-sh
 ```
 
 Set a variable for later commands:
 
 ```bash
-DEPLOY_SA="github-actions-bigquery-mcp@bigquery-mcp-prod.iam.gserviceaccount.com"
+DEPLOY_SA="github-actions-bigquery-mcp@ice-sh.iam.gserviceaccount.com"
 ```
 
 ## Grant Deploy Permissions
@@ -62,15 +64,15 @@ DEPLOY_SA="github-actions-bigquery-mcp@bigquery-mcp-prod.iam.gserviceaccount.com
 Grant only deployment-related permissions:
 
 ```bash
-gcloud projects add-iam-policy-binding bigquery-mcp-prod \
+gcloud projects add-iam-policy-binding ice-sh \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/run.admin"
 
-gcloud projects add-iam-policy-binding bigquery-mcp-prod \
+gcloud projects add-iam-policy-binding ice-sh \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/artifactregistry.writer"
 
-gcloud projects add-iam-policy-binding bigquery-mcp-prod \
+gcloud projects add-iam-policy-binding ice-sh \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/iam.serviceAccountUser"
 ```
@@ -83,14 +85,14 @@ Enable the IAM Credentials API if it is not already enabled:
 
 ```bash
 gcloud services enable iamcredentials.googleapis.com \
-  --project bigquery-mcp-prod
+  --project ice-sh
 ```
 
 Create a pool:
 
 ```bash
 gcloud iam workload-identity-pools create github-actions \
-  --project bigquery-mcp-prod \
+  --project ice-sh \
   --location="global" \
   --display-name="GitHub Actions"
 ```
@@ -99,7 +101,7 @@ Create a provider restricted to this repository:
 
 ```bash
 gcloud iam workload-identity-pools providers create-oidc github-actions \
-  --project bigquery-mcp-prod \
+  --project ice-sh \
   --location="global" \
   --workload-identity-pool="github-actions" \
   --display-name="GitHub Actions provider" \
@@ -111,10 +113,10 @@ gcloud iam workload-identity-pools providers create-oidc github-actions \
 Allow that repository to impersonate the deploy service account:
 
 ```bash
-PROJECT_NUMBER="$(gcloud projects describe bigquery-mcp-prod --format='value(projectNumber)')"
+PROJECT_NUMBER="$(gcloud projects describe ice-sh --format='value(projectNumber)')"
 
 gcloud iam service-accounts add-iam-policy-binding "${DEPLOY_SA}" \
-  --project bigquery-mcp-prod \
+  --project ice-sh \
   --role="roles/iam.workloadIdentityUser" \
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-actions/attribute.repository/Growth-Management/bigquery-readonly-mcp"
 ```
@@ -132,7 +134,7 @@ The Cloud Run runtime service account needs access to Secret Manager values refe
 If using the default Compute service account as runtime identity, first identify it:
 
 ```bash
-PROJECT_NUMBER="$(gcloud projects describe bigquery-mcp-prod --format='value(projectNumber)')"
+PROJECT_NUMBER="$(gcloud projects describe ice-sh --format='value(projectNumber)')"
 RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 ```
 
@@ -141,7 +143,7 @@ Grant secret access:
 ```bash
 for SECRET in google-oauth-client-id google-oauth-client-secret bigquery-mcp-session-secret; do
   gcloud secrets add-iam-policy-binding "${SECRET}" \
-    --project bigquery-mcp-prod \
+    --project ice-sh \
     --member="serviceAccount:${RUNTIME_SA}" \
     --role="roles/secretmanager.secretAccessor"
 done
