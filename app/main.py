@@ -30,6 +30,11 @@ def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.get("/.well-known/oauth-authorization-server")
 def oauth_metadata(settings: Settings = Depends(get_settings)) -> dict[str, object]:
     return {
@@ -100,7 +105,7 @@ async def oauth_callback(
         access_token=token_data["access_token"],
         ttl_seconds=settings.session_ttl_seconds,
     )
-    redirect = RedirectResponse("/healthz")
+    redirect = RedirectResponse("/health")
     redirect.set_cookie("mcp_session", session_id, httponly=True, secure=True, samesite="lax", max_age=settings.session_ttl_seconds)
     redirect.delete_cookie("oauth_state")
     return redirect
