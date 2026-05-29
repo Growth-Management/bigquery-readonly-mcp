@@ -4,15 +4,17 @@ This guide covers the Phase 5 Cloud Run setup for `Growth-Management/bigquery-re
 
 ## Fixed Defaults
 
-- Deploy project: `bigquery-mcp-prod`
+- Deploy project: `ice-sh`
 - Region: `asia-northeast1`
 - Service: `bigquery-readonly-mcp`
 - Initial BigQuery validation project: `ice-sh`
 - Allowed domain: `impress.co.jp`
 
+Deployment resources are managed per GCP project. For the initial rollout, deploy into `ice-sh`. For another project, repeat this guide with that project ID and keep its Cloud Run, Artifact Registry, Secret Manager, OAuth redirect URL, and GitHub Secrets separate.
+
 ## Required APIs
 
-Enable these APIs in `bigquery-mcp-prod`:
+Enable these APIs in `ice-sh`:
 
 ```bash
 gcloud services enable \
@@ -21,7 +23,7 @@ gcloud services enable \
   secretmanager.googleapis.com \
   cloudbuild.googleapis.com \
   iamcredentials.googleapis.com \
-  --project bigquery-mcp-prod
+  --project ice-sh
 ```
 
 ## Artifact Registry
@@ -33,7 +35,7 @@ gcloud artifacts repositories create bigquery-readonly-mcp \
   --repository-format=docker \
   --location=asia-northeast1 \
   --description="BigQuery readonly MCP images" \
-  --project bigquery-mcp-prod
+  --project ice-sh
 ```
 
 ## Secret Manager
@@ -43,15 +45,15 @@ Store secret values in Secret Manager. Do not put secret values in GitHub or `en
 ```bash
 printf '%s' '<oauth-client-id>' | gcloud secrets create google-oauth-client-id \
   --data-file=- \
-  --project bigquery-mcp-prod
+  --project ice-sh
 
 printf '%s' '<oauth-client-secret>' | gcloud secrets create google-oauth-client-secret \
   --data-file=- \
-  --project bigquery-mcp-prod
+  --project ice-sh
 
 openssl rand -base64 32 | gcloud secrets create bigquery-mcp-session-secret \
   --data-file=- \
-  --project bigquery-mcp-prod
+  --project ice-sh
 ```
 
 If a secret already exists, add a new version instead:
@@ -59,12 +61,12 @@ If a secret already exists, add a new version instead:
 ```bash
 printf '%s' '<new-value>' | gcloud secrets versions add google-oauth-client-secret \
   --data-file=- \
-  --project bigquery-mcp-prod
+  --project ice-sh
 ```
 
 ## OAuth Redirect URI
 
-Create a Google OAuth Web application in `bigquery-mcp-prod`, then register the deployed callback URL:
+Create a Google OAuth Web application in `ice-sh`, then register the deployed callback URL:
 
 ```text
 https://<cloud-run-url>/oauth/callback
@@ -84,7 +86,7 @@ Use this path for a first manual smoke test before relying on GitHub Actions.
 ```bash
 gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
 
-IMAGE="asia-northeast1-docker.pkg.dev/bigquery-mcp-prod/bigquery-readonly-mcp/bigquery-readonly-mcp:manual-$(date +%Y%m%d%H%M%S)"
+IMAGE="asia-northeast1-docker.pkg.dev/ice-sh/bigquery-readonly-mcp/bigquery-readonly-mcp:manual-$(date +%Y%m%d%H%M%S)"
 
 docker build -t "$IMAGE" .
 docker push "$IMAGE"
@@ -92,7 +94,7 @@ docker push "$IMAGE"
 gcloud run deploy bigquery-readonly-mcp \
   --image "$IMAGE" \
   --region asia-northeast1 \
-  --project bigquery-mcp-prod \
+  --project ice-sh \
   --platform managed \
   --allow-unauthenticated \
   --set-env-vars "BASE_URL=https://<cloud-run-url>,ALLOWED_DOMAIN=impress.co.jp,DEFAULT_PROJECT_ID=ice-sh,MAXIMUM_BYTES_BILLED=1073741824,MAX_RESULTS=1000,QUERY_TIMEOUT_SECONDS=60" \
