@@ -37,6 +37,7 @@ All tools accept `project_id` where applicable. If omitted, the default is `ice-
 ## Endpoints
 
 - `GET /healthz`
+- `GET /health`
 - `POST /mcp`
 - `GET /oauth/authorize`
 - `GET /oauth/callback`
@@ -110,7 +111,7 @@ The deploy service account needs only deployment permissions, such as Artifact R
 
 Deployment is managed per GCP project. The initial deployment target is `ice-sh`; when this MCP is rolled out to another project, create that project's own Cloud Run service, Artifact Registry repository, Secret Manager secrets, Workload Identity Federation bindings, and GitHub Secrets.
 
-See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment procedure, including required APIs, Artifact Registry, Secret Manager, manual deploy, `/healthz`, and Cloud Logging checks.
+See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment procedure, including required APIs, Artifact Registry, Secret Manager, manual deploy, `/health`, and Cloud Logging checks.
 
 See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the preferred GitHub Actions deployment path using Workload Identity Federation.
 
@@ -159,9 +160,9 @@ jsonPayload.project_id="ice-sh"
 
 ## Current Phase Coverage
 
-- Phase 1: FastAPI app, `/healthz`, `/mcp`, OAuth authorize/callback skeleton, user email lookup
+- Phase 1: FastAPI app, `/healthz`, `/health`, `/mcp`, OAuth authorize/callback skeleton, user email lookup
 - Phase 2: six initial BigQuery tools
 - Phase 3: readonly SQL guard, `maximumBytesBilled`, `max_results`, timeout, basic query error handling
 - Phase 4: structured JSON audit logs are emitted to stdout for Cloud Logging ingestion
-- Phase 5 prep: Docker, env example, Secret Manager policy, and Cloud Run deployment procedure are documented; live deploy and `/healthz` verification still require a `gcloud` environment
+- Phase 5 prep: Docker, env example, Secret Manager policy, and Cloud Run deployment procedure are documented; live deploy and `/health` verification still require a `gcloud` environment
 - Phase 6 prep: GitHub Actions workflow exists; Workload Identity Federation, IAM, and GitHub Secrets setup are documented
