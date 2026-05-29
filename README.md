@@ -125,9 +125,14 @@ Use a user account in the allowed domain with the required BigQuery IAM permissi
 
 ## Audit Logging
 
-Every tool call logs a structured audit event with:
+Every tool call writes a single-line JSON audit event to stdout. Cloud Run ingests stdout into Cloud Logging, where the `message`, `event_type`, `severity`, and tool-specific fields can be filtered.
 
+Each audit event includes:
+
+- `severity`
+- `message`
 - `timestamp`
+- `event_type`
 - `user_email`
 - `tool`
 - `project_id`
@@ -139,9 +144,16 @@ Every tool call logs a structured audit event with:
 
 Some fields may be empty when the tool does not target a dataset or table, or when validation fails before a BigQuery job is created.
 
+Example Cloud Logging filter:
+
+```text
+jsonPayload.event_type="bigquery_mcp_tool_call"
+jsonPayload.project_id="ice-sh"
+```
+
 ## Current Phase Coverage
 
 - Phase 1: FastAPI app, `/healthz`, `/mcp`, OAuth authorize/callback skeleton, user email lookup
 - Phase 2: six initial BigQuery tools
 - Phase 3: readonly SQL guard, `maximumBytesBilled`, `max_results`, timeout, basic query error handling
-- Phase 4 preview: structured audit log helper is included, but production log filtering and retention policy still need validation
+- Phase 4: structured JSON audit logs are emitted to stdout for Cloud Logging ingestion
