@@ -43,6 +43,8 @@ All tools accept `project_id` where applicable. If omitted, the default is `ice-
 - `GET /oauth/callback`
 - `GET /.well-known/oauth-authorization-server`
 
+Use `/health` for Cloud Run external health checks. Cloud Run can reserve `/healthz` before requests reach the container, causing Google Frontend 404 responses even when the FastAPI app is healthy.
+
 ## Local Development
 
 Create a local environment and install dependencies:
