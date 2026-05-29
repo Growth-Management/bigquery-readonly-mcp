@@ -101,6 +101,8 @@ gcloud run deploy bigquery-readonly-mcp \
 
 After the first deploy, update `BASE_URL` to the actual Cloud Run URL and redeploy if needed. The OAuth redirect URI must match the same URL.
 
+For the preferred GitHub Actions deployment path, see [`github-actions-deploy.md`](github-actions-deploy.md).
+
 ## Health Check
 
 ```bash
