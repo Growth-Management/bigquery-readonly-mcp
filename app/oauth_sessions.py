@@ -128,11 +128,10 @@ def _refresh_google_access_token(
             reason = str(body.get("error") or error_class)
         except ValueError:
             pass
-        status = "reauth_required" if reason == "invalid_grant" else "active"
-        updates = {"last_error_class": error_class, "reauth_required_reason": reason}
-        if status == "reauth_required":
-            updates["status"] = status
-        store.update_token_record(token_record_id, updates)
+        if reason == "invalid_grant":
+            _mark_reauth_required(store, token_record_id, reason=reason, error_class=error_class)
+        else:
+            store.update_token_record(token_record_id, {"last_error_class": error_class})
         raise GoogleTokenRefreshError("Google OAuth access token refresh failed") from exc
     except httpx.HTTPError as exc:
         store.update_token_record(token_record_id, {"last_error_class": "google_token_refresh_transport_error"})
@@ -209,10 +208,8 @@ def resolve_persistent_user_session(
 
     token_record_id = str(mcp_session["user_token_record_id"])
     token_record = store.get_token_record(token_record_id)
-    if not token_record or token_record.get("status") not in {"active", "reauth_required"}:
+    if not token_record or token_record.get("status") != "active":
         raise PersistentSessionError("OAuth token record is not active")
-    if token_record.get("status") == "reauth_required" and not token_record.get("refresh_token_ciphertext"):
-        raise PersistentSessionError("OAuth token record requires reauthentication")
 
     google_sub = str(token_record["google_sub"])
     aad = token_aad(document_id=token_record_id, google_sub=google_sub)
