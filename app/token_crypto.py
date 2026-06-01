@@ -30,10 +30,13 @@ class KmsTokenCipher:
         return EncryptedToken(ciphertext=response.ciphertext, kms_key_name=self.key_name)
 
     def decrypt(self, encrypted_token: EncryptedToken, *, aad: bytes) -> str:
+        return self.decrypt_ciphertext(encrypted_token.ciphertext, kms_key_name=encrypted_token.kms_key_name, aad=aad)
+
+    def decrypt_ciphertext(self, ciphertext: bytes, *, kms_key_name: str | None = None, aad: bytes) -> str:
         response = self.client.decrypt(
             request={
-                "name": encrypted_token.kms_key_name,
-                "ciphertext": encrypted_token.ciphertext,
+                "name": kms_key_name or self.key_name,
+                "ciphertext": ciphertext,
                 "additional_authenticated_data": aad,
             }
         )
