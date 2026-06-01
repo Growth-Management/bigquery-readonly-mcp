@@ -11,19 +11,10 @@ from fastapi.responses import RedirectResponse
 from app.audit import audit_event
 from app.config import Settings, get_settings
 from app.mcp import handle_json_rpc
+from app.oauth_sessions import PersistentSessionError, create_persistent_mcp_session, resolve_persistent_user_session
 from app.persistence import get_store, get_token_cipher
-from app.persistence_models import (
-    OAuthAuthorizationCodeRecord,
-    OAuthAuthRequestRecord,
-    OAuthTokenRecord,
-    expires_in,
-)
-from app.security import (
-    hash_google_subject,
-    oauth_auth_request_id,
-    oauth_authorization_code_id,
-    token_aad,
-)
+from app.persistence_models import OAuthAuthorizationCodeRecord, OAuthAuthRequestRecord, OAuthTokenRecord, expires_in
+from app.security import hash_google_subject, oauth_auth_request_id, oauth_authorization_code_id, token_aad
 from app.sessions import session_store
 
 logging.basicConfig(level=logging.INFO)
@@ -283,26 +274,17 @@ async def oauth_token(request: Request, settings: Settings = Depends(get_setting
         )
         raise HTTPException(status_code=401, detail="Reauthentication required at /oauth/authorize")
 
-    google_sub = str(token_record["google_sub"])
-    token_record_id = str(auth_code["user_token_record_id"])
-    aad = token_aad(document_id=token_record_id, google_sub=google_sub)
-    access_token = get_token_cipher().decrypt_ciphertext(
-        token_record["access_token_ciphertext"],
-        kms_key_name=token_record.get("refresh_token_kms_key_name") or settings.kms_key_name,
-        aad=aad,
-    )
-    session_id = session_store.create(
-        email=str(auth_code["user_email"]),
-        access_token=access_token,
-        ttl_seconds=settings.session_ttl_seconds,
+    token_response = create_persistent_mcp_session(
+        store=get_store(),
+        settings=settings,
+        user_token_record_id=str(auth_code["user_token_record_id"]),
+        user_email=str(auth_code["user_email"]),
+        google_sub=str(auth_code["google_sub"]),
+        scopes=list(auth_code.get("scopes") or OAUTH_SCOPES),
     )
     audit_event(event_type="oauth_authorization_code_consumed", user_email=str(auth_code["user_email"]), success=True)
-    return {
-        "access_token": session_id,
-        "token_type": "Bearer",
-        "expires_in": settings.session_ttl_seconds,
-        "scope": " ".join(auth_code.get("scopes") or OAUTH_SCOPES),
-    }
+    audit_event(event_type="mcp_session_created", user_email=str(auth_code["user_email"]), success=True)
+    return token_response
 
 
 @app.post("/mcp")
@@ -312,8 +294,19 @@ async def mcp_endpoint(
     mcp_session: str | None = Cookie(default=None),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
-    session = session_store.get(_bearer_token(authorization) or mcp_session)
+    bearer_token = _bearer_token(authorization) or mcp_session
+    try:
+        session = resolve_persistent_user_session(
+            bearer_token=bearer_token,
+            store=get_store(),
+            settings=settings,
+            cipher=get_token_cipher(),
+        )
+    except PersistentSessionError as exc:
+        audit_event(event_type="mcp_session_rejected", success=False, error_class="token_record_unavailable", error=str(exc))
+        raise HTTPException(status_code=401, detail="Reauthentication required at /oauth/authorize") from exc
     if not session:
+        audit_event(event_type="mcp_session_rejected", success=False, error_class="missing_or_expired")
         raise HTTPException(status_code=401, detail="Login required at /oauth/authorize")
     payload = await request.json()
     return handle_json_rpc(payload, session, settings)
