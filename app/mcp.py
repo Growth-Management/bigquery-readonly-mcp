@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from app.bigquery_tools import TOOL_HANDLERS, call_tool
@@ -84,11 +85,12 @@ def handle_json_rpc(payload: dict[str, Any], session: UserSession, settings: Set
             name = params.get("name")
             if name not in TOOL_HANDLERS:
                 raise ValueError(f"Unknown tool: {name}")
+            tool_result = call_tool(name, session, params.get("arguments") or {}, settings)
             result = {
                 "content": [
                     {
-                        "type": "json",
-                        "json": call_tool(name, session, params.get("arguments") or {}, settings),
+                        "type": "text",
+                        "text": json.dumps(tool_result, ensure_ascii=False, sort_keys=True),
                     }
                 ]
             }
