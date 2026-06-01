@@ -60,6 +60,14 @@ class FirestoreStore:
         document_ref.update({"last_used_at": utc_now()})
         return data
 
+    def revoke_mcp_sessions_for_token_record(self, token_record_id: str, *, reason: str) -> int:
+        revoked = 0
+        query = self.client.collection(self.mcp_session_collection).where("user_token_record_id", "==", token_record_id)
+        for snapshot in query.stream():
+            snapshot.reference.update({"status": "revoked", "revoked_at": utc_now(), "revoked_reason": reason})
+            revoked += 1
+        return revoked
+
     def save_token_record(self, document_id: str, record: OAuthTokenRecord) -> None:
         self.client.collection(self.oauth_token_collection).document(document_id).set(record.to_firestore())
 
@@ -77,6 +85,9 @@ class FirestoreStore:
         if reason_field:
             updates[reason_field] = reason
         self.client.collection(self.oauth_token_collection).document(document_id).update(updates)
+
+    def delete_token_record(self, document_id: str) -> None:
+        self.client.collection(self.oauth_token_collection).document(document_id).delete()
 
     def _consume_once(self, collection_name: str, document_id: str, *, now: datetime | None = None) -> dict[str, Any] | None:
         current_time = now or utc_now()
