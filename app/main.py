@@ -2,15 +2,28 @@ import base64
 import hashlib
 import logging
 import secrets
-import time
 from urllib.parse import parse_qs, urlencode
 
 import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
+from app.audit import audit_event
 from app.config import Settings, get_settings
 from app.mcp import handle_json_rpc
+from app.persistence import get_store, get_token_cipher
+from app.persistence_models import (
+    OAuthAuthorizationCodeRecord,
+    OAuthAuthRequestRecord,
+    OAuthTokenRecord,
+    expires_in,
+)
+from app.security import (
+    hash_google_subject,
+    oauth_auth_request_id,
+    oauth_authorization_code_id,
+    token_aad,
+)
 from app.sessions import session_store
 
 logging.basicConfig(level=logging.INFO)
@@ -24,23 +37,8 @@ OAUTH_SCOPES = [
     "profile",
     "https://www.googleapis.com/auth/bigquery.readonly",
 ]
-AUTH_REQUEST_TTL_SECONDS = 600
-AUTH_CODE_TTL_SECONDS = 600
-
-auth_requests: dict[str, dict[str, object]] = {}
-auth_codes: dict[str, dict[str, object]] = {}
 
 app = FastAPI(title="BigQuery Readonly MCP")
-
-
-def _prune_oauth_state() -> None:
-    now = time.time()
-    for key, value in list(auth_requests.items()):
-        if float(value["expires_at"]) <= now:
-            auth_requests.pop(key, None)
-    for key, value in list(auth_codes.items()):
-        if float(value["expires_at"]) <= now:
-            auth_codes.pop(key, None)
 
 
 def _verify_pkce(code_verifier: str | None, code_challenge: object, code_challenge_method: object) -> None:
@@ -71,6 +69,11 @@ def _bearer_token(authorization: str | None) -> str | None:
     return token
 
 
+def _scopes_from_token_response(token_data: dict[str, object]) -> list[str]:
+    scope_text = str(token_data.get("scope") or "")
+    return scope_text.split() if scope_text else OAUTH_SCOPES
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
@@ -97,16 +100,29 @@ def oauth_metadata(settings: Settings = Depends(get_settings)) -> dict[str, obje
 
 @app.get("/oauth/authorize")
 def oauth_authorize(request: Request, settings: Settings = Depends(get_settings)) -> RedirectResponse:
-    _prune_oauth_state()
     google_state = secrets.token_urlsafe(24)
     params = request.query_params
-    auth_requests[google_state] = {
-        "redirect_uri": params.get("redirect_uri"),
-        "client_state": params.get("state"),
-        "code_challenge": params.get("code_challenge"),
-        "code_challenge_method": params.get("code_challenge_method"),
-        "expires_at": time.time() + AUTH_REQUEST_TTL_SECONDS,
-    }
+    store = get_store()
+    document_id = oauth_auth_request_id(google_state, settings.effective_token_hash_secret)
+    auth_request = OAuthAuthRequestRecord(
+        google_state_hash=document_id,
+        client_redirect_uri=params.get("redirect_uri"),
+        client_state=params.get("state"),
+        code_challenge=params.get("code_challenge"),
+        code_challenge_method=params.get("code_challenge_method"),
+        requested_scopes=OAUTH_SCOPES,
+        force_consent=params.get("prompt") == "consent",
+        expires_at=expires_in(settings.oauth_state_ttl_seconds),
+    )
+    store.save_auth_request(document_id, auth_request)
+    audit_event(
+        event_type="oauth_auth_request_created",
+        success=True,
+        source="chatgpt_mcp",
+        oauth_state_hash=document_id,
+    )
+
+    prompt = "consent select_account" if auth_request.force_consent else "select_account"
     query = urlencode(
         {
             "client_id": settings.oauth_client_id,
@@ -114,12 +130,13 @@ def oauth_authorize(request: Request, settings: Settings = Depends(get_settings)
             "response_type": "code",
             "scope": " ".join(OAUTH_SCOPES),
             "state": google_state,
-            "access_type": "online",
-            "prompt": "select_account",
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": prompt,
         }
     )
     redirect = RedirectResponse(f"{GOOGLE_AUTH_URL}?{query}")
-    redirect.set_cookie("oauth_state", google_state, httponly=True, secure=True, samesite="lax", max_age=AUTH_REQUEST_TTL_SECONDS)
+    redirect.set_cookie("oauth_state", google_state, httponly=True, secure=True, samesite="lax", max_age=settings.oauth_state_ttl_seconds)
     return redirect
 
 
@@ -130,10 +147,26 @@ async def oauth_callback(
     oauth_state: str | None = Cookie(default=None),
     settings: Settings = Depends(get_settings),
 ) -> RedirectResponse:
-    _prune_oauth_state()
-    auth_request = auth_requests.pop(state, None)
-    if auth_request is None and (not oauth_state or not secrets.compare_digest(state, oauth_state)):
+    store = get_store()
+    state_document_id = oauth_auth_request_id(state, settings.effective_token_hash_secret)
+    auth_request = store.consume_auth_request(state_document_id)
+    if auth_request is None:
+        audit_event(
+            event_type="oauth_auth_request_failed",
+            success=False,
+            error_class="invalid_state",
+            oauth_state_hash=state_document_id,
+        )
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
+    if oauth_state and not secrets.compare_digest(state, oauth_state):
+        audit_event(
+            event_type="oauth_auth_request_failed",
+            success=False,
+            error_class="cookie_state_mismatch",
+            oauth_state_hash=state_document_id,
+        )
+        raise HTTPException(status_code=400, detail="Invalid OAuth state")
+    audit_event(event_type="oauth_auth_request_consumed", success=True, oauth_state_hash=state_document_id)
 
     async with httpx.AsyncClient(timeout=20) as client:
         token_response = await client.post(
@@ -156,19 +189,62 @@ async def oauth_callback(
         userinfo = userinfo_response.json()
 
     email = userinfo.get("email")
-    if not email or not email.endswith(f"@{settings.allowed_domain}"):
+    google_sub = userinfo.get("sub")
+    if not email or not str(email).endswith(f"@{settings.allowed_domain}"):
+        audit_event(
+            event_type="oauth_domain_rejected",
+            user_email=str(email) if email else None,
+            success=False,
+            error_class="domain_mismatch",
+            allowed_domain=settings.allowed_domain,
+        )
         raise HTTPException(status_code=403, detail="Email domain is not allowed")
+    if not google_sub:
+        audit_event(event_type="oauth_authorization_code_failed", user_email=str(email), success=False, error_class="missing_google_sub")
+        raise HTTPException(status_code=400, detail="Google user subject is required")
 
-    redirect_uri = str(auth_request.get("redirect_uri") or "") if auth_request else ""
+    token_record_id = hash_google_subject(str(google_sub))
+    aad = token_aad(document_id=token_record_id, google_sub=str(google_sub))
+    cipher = get_token_cipher()
+    encrypted_access_token = cipher.encrypt(str(token_data["access_token"]), aad=aad)
+    refresh_token = token_data.get("refresh_token")
+    encrypted_refresh_token = cipher.encrypt(str(refresh_token), aad=aad) if refresh_token else None
+    scopes = _scopes_from_token_response(token_data)
+    store.save_token_record(
+        token_record_id,
+        OAuthTokenRecord(
+            user_email=str(email),
+            google_sub=str(google_sub),
+            allowed_domain=settings.allowed_domain,
+            scopes=scopes,
+            refresh_token_ciphertext=encrypted_refresh_token.ciphertext if encrypted_refresh_token else None,
+            refresh_token_kms_key_name=encrypted_refresh_token.kms_key_name if encrypted_refresh_token else None,
+            access_token_ciphertext=encrypted_access_token.ciphertext,
+            access_token_expires_at=expires_in(int(token_data.get("expires_in") or 3600)),
+        ),
+    )
+    audit_event(event_type="oauth_token_record_created", user_email=str(email), google_sub_hash=token_record_id, success=True)
+
+    redirect_uri = str(auth_request.get("client_redirect_uri") or "")
     if redirect_uri:
         auth_code = secrets.token_urlsafe(32)
-        auth_codes[auth_code] = {
-            "email": email,
-            "access_token": token_data["access_token"],
-            "code_challenge": auth_request.get("code_challenge"),
-            "code_challenge_method": auth_request.get("code_challenge_method"),
-            "expires_at": time.time() + AUTH_CODE_TTL_SECONDS,
-        }
+        auth_code_id = oauth_authorization_code_id(auth_code, settings.effective_token_hash_secret)
+        store.save_authorization_code(
+            auth_code_id,
+            OAuthAuthorizationCodeRecord(
+                auth_code_hash=auth_code_id,
+                user_token_record_id=token_record_id,
+                user_email=str(email),
+                google_sub=str(google_sub),
+                code_challenge=auth_request.get("code_challenge"),
+                code_challenge_method=auth_request.get("code_challenge_method"),
+                scopes=scopes,
+                expires_at=expires_in(settings.oauth_code_ttl_seconds),
+                client_redirect_uri=redirect_uri,
+                client_state=auth_request.get("client_state"),
+            ),
+        )
+        audit_event(event_type="oauth_authorization_code_created", user_email=str(email), google_sub_hash=token_record_id, success=True)
         query: dict[str, str] = {"code": auth_code}
         client_state = auth_request.get("client_state")
         if client_state:
@@ -178,8 +254,8 @@ async def oauth_callback(
         return redirect
 
     session_id = session_store.create(
-        email=email,
-        access_token=token_data["access_token"],
+        email=str(email),
+        access_token=str(token_data["access_token"]),
         ttl_seconds=settings.session_ttl_seconds,
     )
     redirect = RedirectResponse("/health")
@@ -190,7 +266,6 @@ async def oauth_callback(
 
 @app.post("/oauth/token")
 async def oauth_token(request: Request, settings: Settings = Depends(get_settings)) -> dict[str, object]:
-    _prune_oauth_state()
     form = parse_qs((await request.body()).decode())
     grant_type = (form.get("grant_type") or [""])[0]
     code = (form.get("code") or [""])[0]
@@ -198,21 +273,44 @@ async def oauth_token(request: Request, settings: Settings = Depends(get_setting
 
     if grant_type != "authorization_code":
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
-    auth_code = auth_codes.pop(code, None)
+    auth_code_id = oauth_authorization_code_id(code, settings.effective_token_hash_secret)
+    auth_code = get_store().consume_authorization_code(auth_code_id)
     if not auth_code:
+        audit_event(event_type="oauth_authorization_code_failed", success=False, error_class="invalid_authorization_code")
         raise HTTPException(status_code=400, detail="Invalid authorization code")
 
     _verify_pkce(code_verifier, auth_code.get("code_challenge"), auth_code.get("code_challenge_method"))
+    token_record = get_store().get_token_record(str(auth_code["user_token_record_id"]))
+    if not token_record or not token_record.get("access_token_ciphertext"):
+        audit_event(
+            event_type="oauth_authorization_code_failed",
+            user_email=str(auth_code.get("user_email")),
+            success=False,
+            error_class="missing_token_record",
+        )
+        raise HTTPException(status_code=401, detail="Reauthentication required at /oauth/authorize")
+
+    google_sub = str(token_record["google_sub"])
+    token_record_id = str(auth_code["user_token_record_id"])
+    aad = token_aad(document_id=token_record_id, google_sub=google_sub)
+    access_token = get_token_cipher().decrypt(
+        encrypted_token=type("EncryptedTokenLike", (), {
+            "ciphertext": token_record["access_token_ciphertext"],
+            "kms_key_name": token_record.get("refresh_token_kms_key_name") or settings.kms_key_name,
+        })(),
+        aad=aad,
+    )
     session_id = session_store.create(
-        email=str(auth_code["email"]),
-        access_token=str(auth_code["access_token"]),
+        email=str(auth_code["user_email"]),
+        access_token=access_token,
         ttl_seconds=settings.session_ttl_seconds,
     )
+    audit_event(event_type="oauth_authorization_code_consumed", user_email=str(auth_code["user_email"]), success=True)
     return {
         "access_token": session_id,
         "token_type": "Bearer",
         "expires_in": settings.session_ttl_seconds,
-        "scope": " ".join(OAUTH_SCOPES),
+        "scope": " ".join(auth_code.get("scopes") or OAUTH_SCOPES),
     }
 
 
