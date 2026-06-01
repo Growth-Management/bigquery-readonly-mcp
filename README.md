@@ -127,6 +127,8 @@ See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment pro
 
 See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the preferred GitHub Actions deployment path using Workload Identity Federation.
 
+See [`docs/phase-7-ice-sh-validation.md`](docs/phase-7-ice-sh-validation.md) for the current Phase 7 validation record.
+
 See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering allowlists, per-project deployment ownership, audit retention, and follow-up hardening.
 
 ## Initial Validation On ice-sh
@@ -143,6 +145,8 @@ Use a user account in the allowed domain with the required BigQuery IAM permissi
 - DML and DDL are rejected before BigQuery execution
 - unauthorized projects return Access Denied
 - audit logs are emitted to Cloud Logging
+
+Current status as of 2026-06-01: all listed `ice-sh` readonly and audit checks are verified except the unauthorized-project Access Denied case. A non-accessible project returned a JSON-RPC error, but the observed BigQuery response was `404 Project not found`, not `403 Access Denied`. Keep the Access Denied case open until an existing project outside the user's IAM scope is available for validation.
 
 ## Audit Logging
 
@@ -180,5 +184,5 @@ jsonPayload.project_id="ice-sh"
 - Phase 4: structured JSON audit logs are emitted to stdout for Cloud Logging ingestion
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
-- Phase 7: `ice-sh` OAuth, MCP, BigQuery tool, readonly guard, unauthorized project, and audit log validation are complete
+- Phase 7: `ice-sh` OAuth, MCP, BigQuery tool, readonly guard, and audit log validation are verified; unauthorized-project Access Denied validation remains open until a real project without user access is available
 - Phase 8: rollout policy is documented in `docs/rollout-policy.md`
