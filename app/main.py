@@ -115,12 +115,7 @@ def oauth_authorize(request: Request, settings: Settings = Depends(get_settings)
         expires_at=expires_in(settings.oauth_state_ttl_seconds),
     )
     store.save_auth_request(document_id, auth_request)
-    audit_event(
-        event_type="oauth_auth_request_created",
-        success=True,
-        source="chatgpt_mcp",
-        oauth_state_hash=document_id,
-    )
+    audit_event(event_type="oauth_auth_request_created", success=True, source="chatgpt_mcp", oauth_state_hash=document_id)
 
     prompt = "consent select_account" if auth_request.force_consent else "select_account"
     query = urlencode(
@@ -151,12 +146,7 @@ async def oauth_callback(
     state_document_id = oauth_auth_request_id(state, settings.effective_token_hash_secret)
     auth_request = store.consume_auth_request(state_document_id)
     if auth_request is None:
-        audit_event(
-            event_type="oauth_auth_request_failed",
-            success=False,
-            error_class="invalid_state",
-            oauth_state_hash=state_document_id,
-        )
+        audit_event(event_type="oauth_auth_request_failed", success=False, error_class="invalid_state", oauth_state_hash=state_document_id)
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
     if oauth_state and not secrets.compare_digest(state, oauth_state):
         audit_event(
@@ -204,11 +194,14 @@ async def oauth_callback(
         raise HTTPException(status_code=400, detail="Google user subject is required")
 
     token_record_id = hash_google_subject(str(google_sub))
+    existing_token_record = store.get_token_record(token_record_id) or {}
     aad = token_aad(document_id=token_record_id, google_sub=str(google_sub))
     cipher = get_token_cipher()
     encrypted_access_token = cipher.encrypt(str(token_data["access_token"]), aad=aad)
     refresh_token = token_data.get("refresh_token")
     encrypted_refresh_token = cipher.encrypt(str(refresh_token), aad=aad) if refresh_token else None
+    refresh_token_ciphertext = encrypted_refresh_token.ciphertext if encrypted_refresh_token else existing_token_record.get("refresh_token_ciphertext")
+    refresh_token_kms_key_name = encrypted_refresh_token.kms_key_name if encrypted_refresh_token else existing_token_record.get("refresh_token_kms_key_name")
     scopes = _scopes_from_token_response(token_data)
     store.save_token_record(
         token_record_id,
@@ -217,8 +210,8 @@ async def oauth_callback(
             google_sub=str(google_sub),
             allowed_domain=settings.allowed_domain,
             scopes=scopes,
-            refresh_token_ciphertext=encrypted_refresh_token.ciphertext if encrypted_refresh_token else None,
-            refresh_token_kms_key_name=encrypted_refresh_token.kms_key_name if encrypted_refresh_token else None,
+            refresh_token_ciphertext=refresh_token_ciphertext,
+            refresh_token_kms_key_name=refresh_token_kms_key_name,
             access_token_ciphertext=encrypted_access_token.ciphertext,
             access_token_expires_at=expires_in(int(token_data.get("expires_in") or 3600)),
         ),
