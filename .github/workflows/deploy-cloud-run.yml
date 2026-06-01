@@ -1,6 +1,8 @@
 name: Deploy Cloud Run
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -11,6 +13,13 @@ env:
   SERVICE: bigquery-readonly-mcp
   ARTIFACT_REGISTRY_REPOSITORY: bigquery-readonly-mcp
   IMAGE_NAME: bigquery-readonly-mcp
+  OAUTH_TOKEN_COLLECTION: oauth_token_records
+  OAUTH_AUTH_REQUEST_COLLECTION: oauth_auth_requests
+  OAUTH_AUTHORIZATION_CODE_COLLECTION: oauth_authorization_codes
+  MCP_SESSION_COLLECTION: mcp_sessions
+  OAUTH_STATE_TTL_SECONDS: "600"
+  OAUTH_CODE_TTL_SECONDS: "600"
+  SESSION_TTL_SECONDS: "3600"
 
 jobs:
   test:
@@ -27,6 +36,7 @@ jobs:
 
   deploy:
     needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -54,11 +64,12 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
+          KMS_KEY_NAME="projects/${{ secrets.GCP_PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/bigquery-readonly-mcp/cryptoKeys/oauth-token-encryption"
           gcloud run deploy "${{ env.SERVICE }}" \
             --image "$IMAGE" \
             --region "${{ env.REGION }}" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars "BASE_URL=${{ secrets.BASE_URL }},ALLOWED_DOMAIN=impress.co.jp,DEFAULT_PROJECT_ID=ice-sh,MAXIMUM_BYTES_BILLED=1073741824,MAX_RESULTS=1000,QUERY_TIMEOUT_SECONDS=60" \
-            --set-secrets "GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,SESSION_SECRET=bigquery-mcp-session-secret:latest"
+            --set-env-vars "BASE_URL=${{ secrets.BASE_URL }},ALLOWED_DOMAIN=impress.co.jp,DEFAULT_PROJECT_ID=ice-sh,MAXIMUM_BYTES_BILLED=1073741824,MAX_RESULTS=1000,QUERY_TIMEOUT_SECONDS=60,SESSION_TTL_SECONDS=${{ env.SESSION_TTL_SECONDS }},FIRESTORE_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},OAUTH_TOKEN_COLLECTION=${{ env.OAUTH_TOKEN_COLLECTION }},OAUTH_AUTH_REQUEST_COLLECTION=${{ env.OAUTH_AUTH_REQUEST_COLLECTION }},OAUTH_AUTHORIZATION_CODE_COLLECTION=${{ env.OAUTH_AUTHORIZATION_CODE_COLLECTION }},MCP_SESSION_COLLECTION=${{ env.MCP_SESSION_COLLECTION }},OAUTH_STATE_TTL_SECONDS=${{ env.OAUTH_STATE_TTL_SECONDS }},OAUTH_CODE_TTL_SECONDS=${{ env.OAUTH_CODE_TTL_SECONDS }},KMS_KEY_NAME=${KMS_KEY_NAME}" \
+            --set-secrets "GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,SESSION_SECRET=bigquery-mcp-session-secret:latest,TOKEN_HASH_SECRET=bigquery-mcp-token-hash-secret:latest"
