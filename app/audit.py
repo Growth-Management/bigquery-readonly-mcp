@@ -1,9 +1,6 @@
 import json
-import logging
 from datetime import UTC, datetime
 from typing import Any
-
-logger = logging.getLogger("bigquery_readonly_mcp.audit")
 
 
 def build_audit_payload(
@@ -60,4 +57,4 @@ def audit_log(
         error=error,
         extra=extra,
     )
-    logger.info(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
