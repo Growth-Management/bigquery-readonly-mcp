@@ -184,6 +184,30 @@ gcloud kms keys add-iam-policy-binding oauth-token-encryption \
 
 For tighter control, create a dedicated runtime service account and update the workflow to pass `--service-account` during `gcloud run deploy`.
 
+## GCP Prerequisite Check
+
+Before merging or manually dispatching a deploy, run the prerequisite checker from Cloud Shell or another environment with `gcloud` and `jq`:
+
+```bash
+PROJECT_ID=ice-sh \
+REGION=asia-northeast1 \
+SERVICE=bigquery-readonly-mcp \
+BASE_URL="https://bigquery-readonly-mcp-ppwdcgrska-an.a.run.app" \
+bash scripts/check_gcp_prereqs.sh
+```
+
+The script checks:
+
+- Active `gcloud` authentication.
+- `bigquery-mcp-token-hash-secret` and the other required Secret Manager secrets exist.
+- The Cloud Run runtime service account can access each required secret.
+- The runtime service account has Firestore read/write permission.
+- The OAuth token KMS key exists and the runtime service account can encrypt/decrypt with it.
+- Firestore TTL is configured for short-lived collections, warning if it is missing.
+- `/health` succeeds when `BASE_URL` is provided.
+
+If the script fails, fix the missing Secret Manager, IAM, KMS, or TTL setting before deploying the OAuth persistence branch.
+
 ## Cloud Run Runtime Settings
 
 The workflow deploys these OAuth persistence settings to Cloud Run:
