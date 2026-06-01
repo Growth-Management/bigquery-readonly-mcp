@@ -1,6 +1,6 @@
 import json
 
-from app.audit import audit_log, build_audit_payload
+from app.audit import REDACTED, audit_event, audit_log, build_audit_event, build_audit_payload
 
 
 def test_build_audit_payload_includes_cloud_logging_fields() -> None:
@@ -42,6 +42,26 @@ def test_build_audit_payload_marks_errors_as_warning() -> None:
     assert payload["error"] == "Forbidden SQL keyword: DELETE"
 
 
+def test_build_audit_event_scrubs_secret_fields() -> None:
+    payload = build_audit_event(
+        event_type="oauth_token_refresh",
+        user_email="user@impress.co.jp",
+        success=False,
+        error_class="invalid_grant",
+        extra={
+            "refresh_token": "secret-refresh-token",
+            "nested": {"access_token": "secret-access-token"},
+            "safe_status": "reauth_required",
+        },
+    )
+
+    assert payload["refresh_token"] == REDACTED
+    assert payload["nested"]["access_token"] == REDACTED
+    assert payload["safe_status"] == "reauth_required"
+    assert "secret-refresh-token" not in json.dumps(payload)
+    assert "secret-access-token" not in json.dumps(payload)
+
+
 def test_audit_log_writes_single_json_line(capsys) -> None:
     audit_log(
         user_email="user@impress.co.jp",
@@ -57,3 +77,19 @@ def test_audit_log_writes_single_json_line(capsys) -> None:
     assert payload["tool"] == "list_datasets"
     assert payload["project_id"] == "ice-sh"
     assert payload["success"] is True
+
+
+def test_audit_event_writes_generic_event(capsys) -> None:
+    audit_event(
+        event_type="mcp_session_rejected",
+        user_email="user@impress.co.jp",
+        success=False,
+        error_class="expired",
+        session_id="raw-session-id",
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["event_type"] == "mcp_session_rejected"
+    assert payload["error_class"] == "expired"
+    assert payload["session_id"] == REDACTED
