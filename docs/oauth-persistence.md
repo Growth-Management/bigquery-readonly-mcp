@@ -24,6 +24,7 @@ This branch adds the foundation and wires the OAuth authorization request and in
 - `/oauth/authorize` writes OAuth request state to `oauth_auth_requests`.
 - `/oauth/callback` consumes OAuth request state from Firestore, writes an encrypted token record, and writes an internal authorization code record.
 - `/oauth/token` consumes the internal authorization code from Firestore and decrypts the stored access token to create the current in-memory MCP session.
+- Existing encrypted refresh tokens are preserved when Google does not return a new refresh token during a later OAuth callback.
 
 The MCP session itself is still backed by the existing in-memory session store. Replacing that with `mcp_sessions` is the next implementation step.
 
@@ -107,6 +108,5 @@ Do not log SQL result rows or token values.
 
 1. Replace `InMemorySessionStore` with `mcp_sessions`.
 2. Add refresh-token based access token refresh handling.
-3. Preserve existing refresh tokens when Google does not return a new refresh token.
-4. Add reauth-required state transitions for `invalid_grant`, scope mismatch, and missing refresh token.
-5. Add admin scripts for disable, delete, and force reauth.
+3. Add reauth-required state transitions for `invalid_grant`, scope mismatch, and missing refresh token.
+4. Add admin scripts for disable, delete, and force reauth.
