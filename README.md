@@ -23,6 +23,8 @@ Users should receive the minimum required IAM permissions:
 
 The server enforces readonly SQL before execution. `run_readonly_query` and `dry_run_query` only allow one `SELECT` or `WITH` statement and reject DML, DDL, `EXPORT`, `LOAD`, grants, revokes, and procedure calls.
 
+OAuth persistence is being implemented with Firestore, Cloud KMS, hashed short-lived OAuth state, hashed MCP bearer sessions, and audit redaction so Cloud Run can operate without relying on instance memory. See [`docs/oauth-persistence.md`](docs/oauth-persistence.md).
+
 ## MCP Tools
 
 - `list_projects`
@@ -63,11 +65,14 @@ export BASE_URL="http://localhost:8080"
 export GOOGLE_OAUTH_CLIENT_ID="..."
 export GOOGLE_OAUTH_CLIENT_SECRET="..."
 export SESSION_SECRET="replace-with-random-value"
+export TOKEN_HASH_SECRET="replace-with-random-value"
 export ALLOWED_DOMAIN="impress.co.jp"
 export DEFAULT_PROJECT_ID="ice-sh"
 export MAXIMUM_BYTES_BILLED="1073741824"
 export MAX_RESULTS="1000"
 export QUERY_TIMEOUT_SECONDS="60"
+export FIRESTORE_PROJECT_ID="ice-sh"
+export KMS_KEY_NAME="projects/ice-sh/locations/asia-northeast1/keyRings/bigquery-readonly-mcp/cryptoKeys/oauth-token-encryption"
 ```
 
 Run the app:
@@ -100,6 +105,7 @@ Store these values in Secret Manager rather than the repository:
 - `google-oauth-client-id`
 - `google-oauth-client-secret`
 - `bigquery-mcp-session-secret`
+- `bigquery-mcp-token-hash-secret`
 
 For MCP clients such as ChatGPT custom connectors, this service acts as the OAuth server and bridges to Google OAuth internally:
 
