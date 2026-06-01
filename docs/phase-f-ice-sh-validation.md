@@ -3,7 +3,7 @@
 Date: 2026-06-01
 Target PR: https://github.com/Growth-Management/bigquery-readonly-mcp/pull/1
 Branch: `codex/oauth-persistence-foundation`
-Head checked: `d416655d18f10be3c822596bb521a45a16810605`
+Head checked: `64417c23667b294ac86cf3a2cfc0f3e1600c4f43`
 Cloud Run service under test: `https://bigquery-readonly-mcp-ppwdcgrska-an.a.run.app`
 Initial validation project: `ice-sh`
 
@@ -15,14 +15,18 @@ Phase F verifies that the OAuth persistence improvements fix the short-lived aut
 
 PR #1 is still open and has not been merged to `main`.
 
-No GitHub Actions workflow run was found for commit `d416655d18f10be3c822596bb521a45a16810605` at the time of this validation attempt. Because the OAuth persistence branch has not been observed as deployed, the current Cloud Run service is treated as the pre-persistence deployment for Phase F purposes.
+The workflow now runs on pull requests to `main`. For commit `64417c23667b294ac86cf3a2cfc0f3e1600c4f43`, GitHub Actions run `26739510228` completed the `test` job successfully and skipped `deploy` as intended for a pull request.
+
+Because deploy is intentionally skipped for PR events, the current Cloud Run service is still treated as the pre-persistence deployment for Phase F purposes. The persistence implementation should be deployed by merging to `main` or running `workflow_dispatch` after confirming runtime secrets and IAM.
 
 ## Validation Results
 
 | Check | Result | Evidence / Notes |
 | --- | --- | --- |
 | PR mergeability | PASS | PR #1 is mergeable. |
-| PR deployed to Cloud Run | BLOCKED | No workflow run was found for the latest PR head commit. Deployment of the persistence implementation was not confirmed. |
+| PR CI route | PASS | GitHub Actions run `26739510228`: `test` succeeded. |
+| PR deploy skip behavior | PASS | GitHub Actions run `26739510228`: `deploy` skipped for PR as intended. |
+| PR deployed to Cloud Run | BLOCKED | PR deploy is intentionally skipped. Deployment of the persistence implementation was not confirmed. |
 | MCP connection through ChatGPT connector | FAIL | `list_projects(project_id="ice-sh")` returned HTTP 401 from `/mcp`. |
 | OAuth persistence symptom check | FAIL | The error was `Login required at /oauth/authorize`, which is the short-lived auth failure Phase F is meant to eliminate. |
 | Cloud Run direct `/health` check from workspace | BLOCKED | Workspace network proxy returned `CONNECT tunnel failed, response 403`; this does not prove Cloud Run health failure. |
@@ -50,32 +54,32 @@ URL: https://bigquery-readonly-mcp-ppwdcgrska-an.a.run.app/mcp
 
 This is useful Phase F evidence: the current deployed service still exhibits the authentication symptom that the OAuth persistence PR is intended to fix.
 
+## CI / Deploy Route Findings
+
+The workflow route is now:
+
+- `pull_request` to `main`: run tests only; never deploy.
+- `push` to `main`: run tests, then deploy.
+- `workflow_dispatch`: run tests, then deploy.
+
+The deploy command now passes OAuth persistence settings to Cloud Run, including Firestore collection names, OAuth state/code TTLs, session TTL, `FIRESTORE_PROJECT_ID`, `KMS_KEY_NAME`, and `TOKEN_HASH_SECRET` via Secret Manager.
+
 ## Conclusion
 
 Phase F was started, but it cannot be completed against the current deployed service.
 
-The current result is **BLOCKED before BigQuery tool validation** because the service returned 401 during MCP session resolution. The next meaningful Phase F attempt should happen after the OAuth persistence PR is merged and deployed, or after the branch is deployed to a dedicated validation Cloud Run service.
+The current result is **BLOCKED before BigQuery tool validation** because the service returned 401 during MCP session resolution. The PR CI route is now confirmed healthy, but deployment is intentionally pending until `main` merge or manual dispatch.
 
 ## Required Next Steps
 
-1. Run CI for PR #1 or confirm why the branch does not trigger a workflow.
-2. Merge PR #1 or deploy `codex/oauth-persistence-foundation` to a validation Cloud Run service.
-3. Confirm these runtime settings are present on Cloud Run:
-   - `TOKEN_HASH_SECRET`
-   - `FIRESTORE_PROJECT_ID`
-   - `OAUTH_TOKEN_COLLECTION`
-   - `OAUTH_AUTH_REQUEST_COLLECTION`
-   - `OAUTH_AUTHORIZATION_CODE_COLLECTION`
-   - `MCP_SESSION_COLLECTION`
-   - `OAUTH_STATE_TTL_SECONDS`
-   - `OAUTH_CODE_TTL_SECONDS`
-   - `KMS_KEY_NAME`
-4. Confirm runtime service account IAM:
+1. Confirm Secret Manager has `bigquery-mcp-token-hash-secret`.
+2. Confirm runtime service account has:
+   - Secret Manager access for `bigquery-mcp-token-hash-secret`.
    - Firestore read/write for persistence collections.
    - `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the OAuth token KMS key.
-   - Secret Manager access only for service-level secrets.
-5. Configure Firestore TTL for `oauth_auth_requests`, `oauth_authorization_codes`, and `mcp_sessions`.
-6. Re-run Phase F checks:
+3. Merge PR #1 or run `workflow_dispatch` for `codex/oauth-persistence-foundation` if branch validation deployment is desired.
+4. Configure Firestore TTL for `oauth_auth_requests`, `oauth_authorization_codes`, and `mcp_sessions`.
+5. Re-run Phase F checks:
    - OAuth login.
    - `ice-sh` dataset list.
    - table list.
