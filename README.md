@@ -41,6 +41,7 @@ All tools accept `project_id` where applicable. If omitted, the default is `ice-
 - `POST /mcp`
 - `GET /oauth/authorize`
 - `GET /oauth/callback`
+- `POST /oauth/token`
 - `GET /.well-known/oauth-authorization-server`
 
 Use `/health` for Cloud Run external health checks. Cloud Run can reserve `/healthz` before requests reach the container, causing Google Frontend 404 responses even when the FastAPI app is healthy.
@@ -99,6 +100,15 @@ Store these values in Secret Manager rather than the repository:
 - `google-oauth-client-id`
 - `google-oauth-client-secret`
 - `bigquery-mcp-session-secret`
+
+For MCP clients such as ChatGPT custom connectors, this service acts as the OAuth server and bridges to Google OAuth internally:
+
+- Authorization endpoint: `https://<cloud-run-url>/oauth/authorize`
+- Token endpoint: `https://<cloud-run-url>/oauth/token`
+- Metadata endpoint: `https://<cloud-run-url>/.well-known/oauth-authorization-server`
+- MCP endpoint: `https://<cloud-run-url>/mcp`
+
+The OAuth callback `/oauth/callback` is the Google OAuth redirect URI. MCP clients should be configured with their own callback URL in the client UI when prompted; the service preserves that callback through the OAuth state and returns an authorization code to the MCP client.
 
 ## Cloud Run Deployment
 
