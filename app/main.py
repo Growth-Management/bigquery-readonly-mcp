@@ -293,11 +293,9 @@ async def oauth_token(request: Request, settings: Settings = Depends(get_setting
     google_sub = str(token_record["google_sub"])
     token_record_id = str(auth_code["user_token_record_id"])
     aad = token_aad(document_id=token_record_id, google_sub=google_sub)
-    access_token = get_token_cipher().decrypt(
-        encrypted_token=type("EncryptedTokenLike", (), {
-            "ciphertext": token_record["access_token_ciphertext"],
-            "kms_key_name": token_record.get("refresh_token_kms_key_name") or settings.kms_key_name,
-        })(),
+    access_token = get_token_cipher().decrypt_ciphertext(
+        token_record["access_token_ciphertext"],
+        kms_key_name=token_record.get("refresh_token_kms_key_name") or settings.kms_key_name,
         aad=aad,
     )
     session_id = session_store.create(
