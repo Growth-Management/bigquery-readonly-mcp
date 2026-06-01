@@ -47,7 +47,8 @@ class FirestoreStore:
         self.client.collection(self.mcp_session_collection).document(document_id).set(record.to_firestore())
 
     def get_mcp_session(self, document_id: str) -> dict[str, Any] | None:
-        snapshot = self.client.collection(self.mcp_session_collection).document(document_id).get()
+        document_ref = self.client.collection(self.mcp_session_collection).document(document_id)
+        snapshot = document_ref.get()
         if not snapshot.exists:
             return None
         data = snapshot.to_dict() or {}
@@ -56,6 +57,7 @@ class FirestoreStore:
             return None
         if data.get("status") != "active":
             return None
+        document_ref.update({"last_used_at": utc_now()})
         return data
 
     def save_token_record(self, document_id: str, record: OAuthTokenRecord) -> None:
