@@ -117,6 +117,8 @@ See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment pro
 
 See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the preferred GitHub Actions deployment path using Workload Identity Federation.
 
+See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering allowlists, per-project deployment ownership, audit retention, and follow-up hardening.
+
 ## Initial Validation On ice-sh
 
 Use a user account in the allowed domain with the required BigQuery IAM permissions, then verify:
@@ -166,5 +168,7 @@ jsonPayload.project_id="ice-sh"
 - Phase 2: six initial BigQuery tools
 - Phase 3: readonly SQL guard, `maximumBytesBilled`, `max_results`, timeout, basic query error handling
 - Phase 4: structured JSON audit logs are emitted to stdout for Cloud Logging ingestion
-- Phase 5 prep: Docker, env example, Secret Manager policy, and Cloud Run deployment procedure are documented; live deploy and `/health` verification still require a `gcloud` environment
-- Phase 6 prep: GitHub Actions workflow exists; Workload Identity Federation, IAM, and GitHub Secrets setup are documented
+- Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
+- Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
+- Phase 7: `ice-sh` OAuth, MCP, BigQuery tool, readonly guard, unauthorized project, and audit log validation are complete
+- Phase 8: rollout policy is documented in `docs/rollout-policy.md`
