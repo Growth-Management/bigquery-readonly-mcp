@@ -69,6 +69,9 @@ class FirestoreStore:
             return None
         return snapshot.to_dict() or {}
 
+    def update_token_record(self, document_id: str, updates: dict[str, Any]) -> None:
+        self.client.collection(self.oauth_token_collection).document(document_id).update({**updates, "updated_at": utc_now()})
+
     def mark_token_status(self, document_id: str, *, status: str, reason_field: str | None = None, reason: str | None = None) -> None:
         updates: dict[str, Any] = {"status": status, "updated_at": utc_now()}
         if reason_field:
