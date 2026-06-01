@@ -1,6 +1,8 @@
 from collections.abc import Callable
 from typing import Any
+import time
 
+import httpx
 from google.auth.credentials import Credentials
 from google.cloud import bigquery
 
@@ -8,6 +10,8 @@ from app.audit import audit_log
 from app.config import Settings
 from app.sessions import UserSession
 from app.sql_guard import SqlValidationError, validate_readonly_sql
+
+BIGQUERY_API = "https://bigquery.googleapis.com/bigquery/v2"
 
 
 class AccessTokenCredentials(Credentials):
@@ -36,6 +40,99 @@ def _client(session: UserSession, project_id: str) -> bigquery.Client:
 
 def _project(args: dict[str, Any], settings: Settings) -> str:
     return str(args.get("project_id") or settings.default_project_id)
+
+
+def _query_headers(session: UserSession) -> dict[str, str]:
+    return {"Authorization": f"Bearer {session.access_token}", "Content-Type": "application/json"}
+
+
+def _query_payload(sql: str, settings: Settings, *, dry_run: bool, max_results: int | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "query": sql,
+        "dryRun": dry_run,
+        "useLegacySql": False,
+        "useQueryCache": False,
+        "maximumBytesBilled": str(settings.maximum_bytes_billed),
+        "timeoutMs": settings.query_timeout_seconds * 1000,
+        "jobTimeoutMs": str(settings.query_timeout_seconds * 1000),
+    }
+    if max_results is not None:
+        payload["maxResults"] = max_results
+    return payload
+
+
+def _post_query(session: UserSession, project_id: str, payload: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    timeout = httpx.Timeout(settings.query_timeout_seconds + 10)
+    response = httpx.post(
+        f"{BIGQUERY_API}/projects/{project_id}/queries",
+        headers=_query_headers(session),
+        json=payload,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _wait_for_query(session: UserSession, query_response: dict[str, Any], settings: Settings, max_results: int) -> dict[str, Any]:
+    if query_response.get("jobComplete", True):
+        return query_response
+
+    job_ref = query_response.get("jobReference") or {}
+    project_id = job_ref.get("projectId")
+    job_id = job_ref.get("jobId")
+    if not project_id or not job_id:
+        raise RuntimeError("BigQuery query did not complete and did not return a job reference")
+
+    deadline = time.monotonic() + settings.query_timeout_seconds
+    timeout = httpx.Timeout(settings.query_timeout_seconds + 10)
+    params: dict[str, Any] = {"maxResults": max_results, "timeoutMs": 1000}
+    if job_ref.get("location"):
+        params["location"] = job_ref["location"]
+
+    while time.monotonic() < deadline:
+        response = httpx.get(
+            f"{BIGQUERY_API}/projects/{project_id}/queries/{job_id}",
+            headers=_query_headers(session),
+            params=params,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("jobComplete", False):
+            return result
+        time.sleep(1)
+
+    raise TimeoutError("BigQuery query did not complete within the configured timeout")
+
+
+def _decode_field_value(field: dict[str, Any], value: Any) -> Any:
+    if value is None:
+        return None
+    if field.get("mode") == "REPEATED" and isinstance(value, list):
+        return [_decode_field_value({**field, "mode": "NULLABLE"}, item.get("v") if isinstance(item, dict) else item) for item in value]
+    if field.get("type") == "RECORD" and isinstance(value, dict):
+        child_fields = field.get("fields") or []
+        child_values = value.get("f") or []
+        return {
+            child_field.get("name", str(index)): _decode_field_value(child_field, child_value.get("v"))
+            for index, (child_field, child_value) in enumerate(zip(child_fields, child_values, strict=False))
+        }
+    return value
+
+
+def _rows_to_dicts(query_response: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = ((query_response.get("schema") or {}).get("fields")) or []
+    rows = query_response.get("rows") or []
+    row_values: list[dict[str, Any]] = []
+    for row in rows:
+        values = row.get("f") or []
+        row_values.append(
+            {
+                field.get("name", str(index)): _decode_field_value(field, value.get("v"))
+                for index, (field, value) in enumerate(zip(fields, values, strict=False))
+            }
+        )
+    return row_values
 
 
 def list_projects(session: UserSession, args: dict[str, Any], settings: Settings) -> dict[str, Any]:
@@ -87,16 +184,10 @@ def dry_run_query(session: UserSession, args: dict[str, Any], settings: Settings
     project_id = _project(args, settings)
     sql = str(args["sql"])
     validate_readonly_sql(sql)
-    client = _client(session, project_id)
-    job_config = bigquery.QueryJobConfig(
-        dry_run=True,
-        use_query_cache=False,
-        maximum_bytes_billed=settings.maximum_bytes_billed,
-    )
-    job = client.query(sql, job_config=job_config, timeout=settings.query_timeout_seconds)
+    query_response = _post_query(session, project_id, _query_payload(sql, settings, dry_run=True), settings)
     return {
         "project_id": project_id,
-        "total_bytes_processed": job.total_bytes_processed,
+        "total_bytes_processed": int(query_response.get("totalBytesProcessed") or 0),
         "maximum_bytes_billed": settings.maximum_bytes_billed,
     }
 
@@ -106,16 +197,15 @@ def run_readonly_query(session: UserSession, args: dict[str, Any], settings: Set
     sql = str(args["sql"])
     validate_readonly_sql(sql)
     max_results = min(int(args.get("max_results") or settings.max_results), settings.max_results)
-    client = _client(session, project_id)
-    job_config = bigquery.QueryJobConfig(maximum_bytes_billed=settings.maximum_bytes_billed)
-    job = client.query(sql, job_config=job_config, timeout=settings.query_timeout_seconds)
-    rows = job.result(timeout=settings.query_timeout_seconds, max_results=max_results)
-    row_values = [dict(row.items()) for row in rows]
+    query_response = _post_query(session, project_id, _query_payload(sql, settings, dry_run=False, max_results=max_results), settings)
+    query_response = _wait_for_query(session, query_response, settings, max_results)
+    row_values = _rows_to_dicts(query_response)
     return {
         "project_id": project_id,
-        "total_bytes_processed": job.total_bytes_processed,
+        "total_bytes_processed": int(query_response.get("totalBytesProcessed") or 0),
+        "total_bytes_billed": int(query_response.get("totalBytesBilled") or 0),
         "rows": row_values,
-        "row_count": rows.total_rows,
+        "row_count": int(query_response.get("totalRows") or len(row_values)),
         "returned_rows": len(row_values),
     }
 
