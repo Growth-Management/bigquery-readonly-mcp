@@ -10,9 +10,9 @@ This document describes the first implementation slice for the OAuth persistence
 - Store OAuth state, authorization codes, and MCP bearer sessions as short-lived Firestore records.
 - Emit audit events without logging tokens, authorization codes, client secrets, or plaintext/ciphertext values.
 
-## Initial Implementation Slice
+## Implemented Scope
 
-This branch adds the foundation before wiring it into the live OAuth flow:
+This branch adds the foundation and wires the OAuth authorization request and internal authorization code flow into Firestore:
 
 - Generic audit events with recursive secret scrubbing.
 - Firestore and Cloud KMS dependencies.
@@ -21,6 +21,11 @@ This branch adds the foundation before wiring it into the live OAuth flow:
 - KMS token encryption/decryption helper with Additional Authenticated Data.
 - Dataclass models for token records, OAuth auth requests, internal authorization codes, and MCP sessions.
 - A Firestore store wrapper with one-time consume helpers.
+- `/oauth/authorize` writes OAuth request state to `oauth_auth_requests`.
+- `/oauth/callback` consumes OAuth request state from Firestore, writes an encrypted token record, and writes an internal authorization code record.
+- `/oauth/token` consumes the internal authorization code from Firestore and decrypts the stored access token to create the current in-memory MCP session.
+
+The MCP session itself is still backed by the existing in-memory session store. Replacing that with `mcp_sessions` is the next implementation step.
 
 ## Firestore Collections
 
@@ -44,7 +49,7 @@ Use `TOKEN_HASH_SECRET` when available. If omitted, the app falls back to `SESSI
 
 ## KMS Encryption
 
-Refresh tokens are encrypted with a Cloud KMS symmetric key. The Additional Authenticated Data format is:
+Refresh tokens and the short-lived access token are encrypted with a Cloud KMS symmetric key. The Additional Authenticated Data format is:
 
 ```text
 bigquery-readonly-mcp:v1:oauth_token_records:{document_id}:{google_sub}
@@ -98,11 +103,10 @@ The audit scrubber redacts fields with dangerous names such as:
 
 Do not log SQL result rows or token values.
 
-## Next Implementation Steps
+## Remaining Implementation Steps
 
-1. Wire `oauth_auth_requests` into `/oauth/authorize` and `/oauth/callback`.
-2. Wire `oauth_authorization_codes` into `/oauth/callback` and `/oauth/token`.
-3. Replace `InMemorySessionStore` with `mcp_sessions`.
-4. Persist refresh tokens in `oauth_token_records` using KMS encryption.
-5. Add access token refresh handling and reauth-required state transitions.
-6. Add admin scripts for disable, delete, and force reauth.
+1. Replace `InMemorySessionStore` with `mcp_sessions`.
+2. Add refresh-token based access token refresh handling.
+3. Preserve existing refresh tokens when Google does not return a new refresh token.
+4. Add reauth-required state transitions for `invalid_grant`, scope mismatch, and missing refresh token.
+5. Add admin scripts for disable, delete, and force reauth.
