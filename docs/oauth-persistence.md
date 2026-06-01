@@ -1,6 +1,6 @@
 # OAuth Persistence Foundation
 
-This document describes the first implementation slice for the OAuth persistence improvement track.
+This document describes the OAuth persistence implementation track.
 
 ## Goals
 
@@ -8,11 +8,12 @@ This document describes the first implementation slice for the OAuth persistence
 - Remove the design dependency on Cloud Run instance memory.
 - Store long-lived refresh tokens only as KMS-encrypted ciphertext.
 - Store OAuth state, authorization codes, and MCP bearer sessions as short-lived Firestore records.
+- Refresh expired Google access tokens from the encrypted refresh token without service-account impersonation.
 - Emit audit events without logging tokens, authorization codes, client secrets, or plaintext/ciphertext values.
 
 ## Implemented Scope
 
-This branch adds the foundation and wires OAuth request state, internal authorization codes, and MCP bearer sessions into Firestore:
+This branch adds the persistence foundation and wires OAuth request state, internal authorization codes, MCP bearer sessions, and access-token refresh into Firestore/KMS:
 
 - Generic audit events with recursive secret scrubbing.
 - Firestore and Cloud KMS dependencies.
@@ -20,14 +21,13 @@ This branch adds the foundation and wires OAuth request state, internal authoriz
 - HMAC-based identifiers for OAuth state, authorization codes, and MCP bearer sessions.
 - KMS token encryption/decryption helper with Additional Authenticated Data.
 - Dataclass models for token records, OAuth auth requests, internal authorization codes, and MCP sessions.
-- A Firestore store wrapper with one-time consume helpers.
+- A Firestore store wrapper with one-time consume helpers and token-record partial updates.
 - `/oauth/authorize` writes OAuth request state to `oauth_auth_requests`.
 - `/oauth/callback` consumes OAuth request state from Firestore, writes an encrypted token record, and writes an internal authorization code record.
 - `/oauth/token` consumes the internal authorization code from Firestore and creates a hashed persistent MCP bearer session in `mcp_sessions`.
-- `/mcp` resolves the bearer token through `mcp_sessions`, loads the associated token record, and decrypts the stored access token for BigQuery tool execution.
+- `/mcp` resolves the bearer token through `mcp_sessions`, loads the associated token record, decrypts a still-valid access token, or refreshes an expired access token using the encrypted refresh token.
 - Existing encrypted refresh tokens are preserved when Google does not return a new refresh token during a later OAuth callback.
-
-Access-token refresh from the encrypted refresh token is still a remaining implementation step. Until then, the stored access token is used until it expires.
+- `invalid_grant`, missing refresh token, and malformed refresh responses transition the token record toward explicit reauthentication instead of falling back to unsafe behavior.
 
 ## Firestore Collections
 
@@ -51,13 +51,25 @@ Use `TOKEN_HASH_SECRET` when available. If omitted, the app falls back to `SESSI
 
 ## KMS Encryption
 
-Refresh tokens and the short-lived access token are encrypted with a Cloud KMS symmetric key. The Additional Authenticated Data format is:
+Refresh tokens and short-lived access tokens are encrypted with a Cloud KMS symmetric key. The Additional Authenticated Data format is:
 
 ```text
 bigquery-readonly-mcp:v1:oauth_token_records:{document_id}:{google_sub}
 ```
 
-This binds ciphertext to the intended Firestore token record and Google subject.
+This binds ciphertext to the intended Firestore token record and Google subject. Token records store the KMS key name used for each token ciphertext so future key rotation can be handled without guessing which key encrypted older records.
+
+## Access Token Refresh
+
+`/mcp` resolves a bearer session to a user token record before BigQuery tools run.
+
+- If the stored access token exists and expires more than five minutes in the future, it is decrypted and used for BigQuery.
+- If the access token is missing, expired, or within the five-minute refresh window, the encrypted refresh token is decrypted and exchanged at Google's OAuth token endpoint for a new user access token.
+- The refreshed access token is encrypted, stored back into Firestore with a new expiry, and then used for the BigQuery call.
+- If Google returns a replacement refresh token, it is encrypted and stored, replacing the previous refresh token.
+- If the refresh token is missing or Google returns `invalid_grant`, the token record is marked `reauth_required` and the MCP request returns 401 so the user can start `/oauth/authorize` again.
+
+The refresh flow still uses the user's Google OAuth grant. The Cloud Run service account only reads/writes Firestore, decrypts/encrypts tokens with KMS, and accesses service-level secrets.
 
 ## Required Environment Variables
 
@@ -107,6 +119,6 @@ Do not log SQL result rows or token values.
 
 ## Remaining Implementation Steps
 
-1. Add refresh-token based access token refresh handling.
-2. Add reauth-required state transitions for `invalid_grant`, scope mismatch, and missing refresh token.
-3. Add admin scripts for disable, delete, and force reauth.
+1. Add broader reauth-required handling for scope mismatch and consent changes.
+2. Add admin scripts for disable, delete, and force reauth.
+3. Add operational cleanup guidance for Firestore TTL, KMS rotation, and token record lifecycle reviews.
