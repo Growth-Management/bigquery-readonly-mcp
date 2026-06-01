@@ -84,6 +84,7 @@ class OAuthTokenRecord:
     schema_version: int = 1
     refresh_token_aad_version: str = "v1"
     access_token_ciphertext: bytes | None = None
+    access_token_kms_key_name: str | None = None
     access_token_expires_at: datetime | None = None
     last_refresh_at: datetime | None = None
     last_used_at: datetime | None = None
