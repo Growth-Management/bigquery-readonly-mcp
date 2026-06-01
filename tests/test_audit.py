@@ -1,4 +1,6 @@
-from app.audit import build_audit_payload
+import json
+
+from app.audit import audit_log, build_audit_payload
 
 
 def test_build_audit_payload_includes_cloud_logging_fields() -> None:
@@ -38,3 +40,20 @@ def test_build_audit_payload_marks_errors_as_warning() -> None:
     assert payload["severity"] == "WARNING"
     assert payload["success"] is False
     assert payload["error"] == "Forbidden SQL keyword: DELETE"
+
+
+def test_audit_log_writes_single_json_line(capsys) -> None:
+    audit_log(
+        user_email="user@impress.co.jp",
+        tool="list_datasets",
+        project_id="ice-sh",
+        success=True,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["event_type"] == "bigquery_mcp_tool_call"
+    assert payload["tool"] == "list_datasets"
+    assert payload["project_id"] == "ice-sh"
+    assert payload["success"] is True
