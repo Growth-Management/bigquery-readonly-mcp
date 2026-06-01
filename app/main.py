@@ -204,6 +204,7 @@ async def oauth_callback(
             refresh_token_ciphertext=refresh_token_ciphertext,
             refresh_token_kms_key_name=refresh_token_kms_key_name,
             access_token_ciphertext=encrypted_access_token.ciphertext,
+            access_token_kms_key_name=encrypted_access_token.kms_key_name,
             access_token_expires_at=expires_in(int(token_data.get("expires_in") or 3600)),
         ),
     )
