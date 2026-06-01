@@ -12,7 +12,7 @@ This document describes the first implementation slice for the OAuth persistence
 
 ## Implemented Scope
 
-This branch adds the foundation and wires the OAuth authorization request and internal authorization code flow into Firestore:
+This branch adds the foundation and wires OAuth request state, internal authorization codes, and MCP bearer sessions into Firestore:
 
 - Generic audit events with recursive secret scrubbing.
 - Firestore and Cloud KMS dependencies.
@@ -23,10 +23,11 @@ This branch adds the foundation and wires the OAuth authorization request and in
 - A Firestore store wrapper with one-time consume helpers.
 - `/oauth/authorize` writes OAuth request state to `oauth_auth_requests`.
 - `/oauth/callback` consumes OAuth request state from Firestore, writes an encrypted token record, and writes an internal authorization code record.
-- `/oauth/token` consumes the internal authorization code from Firestore and decrypts the stored access token to create the current in-memory MCP session.
+- `/oauth/token` consumes the internal authorization code from Firestore and creates a hashed persistent MCP bearer session in `mcp_sessions`.
+- `/mcp` resolves the bearer token through `mcp_sessions`, loads the associated token record, and decrypts the stored access token for BigQuery tool execution.
 - Existing encrypted refresh tokens are preserved when Google does not return a new refresh token during a later OAuth callback.
 
-The MCP session itself is still backed by the existing in-memory session store. Replacing that with `mcp_sessions` is the next implementation step.
+Access-token refresh from the encrypted refresh token is still a remaining implementation step. Until then, the stored access token is used until it expires.
 
 ## Firestore Collections
 
@@ -106,7 +107,6 @@ Do not log SQL result rows or token values.
 
 ## Remaining Implementation Steps
 
-1. Replace `InMemorySessionStore` with `mcp_sessions`.
-2. Add refresh-token based access token refresh handling.
-3. Add reauth-required state transitions for `invalid_grant`, scope mismatch, and missing refresh token.
-4. Add admin scripts for disable, delete, and force reauth.
+1. Add refresh-token based access token refresh handling.
+2. Add reauth-required state transitions for `invalid_grant`, scope mismatch, and missing refresh token.
+3. Add admin scripts for disable, delete, and force reauth.
