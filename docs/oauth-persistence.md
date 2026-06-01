@@ -29,6 +29,7 @@ This branch adds the persistence foundation and wires OAuth request state, inter
 - Existing encrypted refresh tokens are preserved when Google does not return a new refresh token during a later OAuth callback.
 - `invalid_grant`, missing refresh token, and malformed refresh responses transition the token record toward explicit reauthentication instead of falling back to unsafe behavior.
 - `scripts/manage_oauth_tokens.py` supports disable, delete, and force reauth actions for persisted user connections.
+- Firestore TTL, KMS rotation, and token lifecycle review operating procedures are documented below.
 
 ## Firestore Collections
 
@@ -107,6 +108,146 @@ Actions:
 
 Each admin action emits an `oauth_token_admin_action` audit event. The event includes the actor email, target user email, action, token record ID, and number of revoked sessions, but never token ciphertext or plaintext.
 
+## Firestore TTL Operations
+
+Configure TTL for records that are intentionally short-lived. TTL is cleanup only; authorization correctness must come from application checks for `expires_at`, `consumed_at`, and `status`.
+
+Recommended TTL fields:
+
+- `oauth_auth_requests.expires_at`: deletes expired OAuth request state.
+- `oauth_authorization_codes.expires_at`: deletes expired internal authorization codes.
+- `mcp_sessions.expires_at`: deletes expired MCP bearer sessions.
+- `oauth_token_records.expire_at`: optional only for records intentionally scheduled for deletion after disable/delete retention review.
+
+Initial setup for `ice-sh`:
+
+```bash
+gcloud firestore fields ttls update expires_at \
+  --collection-group=oauth_auth_requests \
+  --project=ice-sh \
+  --enable-ttl
+
+gcloud firestore fields ttls update expires_at \
+  --collection-group=oauth_authorization_codes \
+  --project=ice-sh \
+  --enable-ttl
+
+gcloud firestore fields ttls update expires_at \
+  --collection-group=mcp_sessions \
+  --project=ice-sh \
+  --enable-ttl
+```
+
+Optional deletion scheduling for token records:
+
+```bash
+gcloud firestore fields ttls update expire_at \
+  --collection-group=oauth_token_records \
+  --project=ice-sh \
+  --enable-ttl
+```
+
+Verification:
+
+```bash
+gcloud firestore fields ttls list --project=ice-sh
+```
+
+Operational notes:
+
+- Firestore TTL deletion is asynchronous and may lag. Never rely on TTL alone to reject expired OAuth state, authorization codes, or MCP sessions.
+- Short-lived records must remain rejected by code immediately after `expires_at` even before TTL deletes them.
+- Review TTL configuration after collection names change or when deploying a separate project.
+- Add a Cloud Logging alert if expired `oauth_auth_requests`, `oauth_authorization_codes`, or `mcp_sessions` grow unexpectedly, because that can indicate TTL was not enabled or is delayed.
+
+## KMS Rotation Operations
+
+Use Cloud KMS key versions for rotation. The application stores the KMS key name used for each token ciphertext, so old ciphertext can remain decryptable while new writes use the primary key version behind the same crypto key.
+
+Recommended setup:
+
+```bash
+gcloud kms keyrings create bigquery-readonly-mcp \
+  --location=asia-northeast1 \
+  --project=ice-sh
+
+gcloud kms keys create oauth-token-encryption \
+  --keyring=bigquery-readonly-mcp \
+  --location=asia-northeast1 \
+  --purpose=encryption \
+  --rotation-period=90d \
+  --next-rotation-time="2026-09-01T00:00:00Z" \
+  --project=ice-sh
+```
+
+Grant the Cloud Run runtime service account only the key-level permission it needs:
+
+```bash
+gcloud kms keys add-iam-policy-binding oauth-token-encryption \
+  --keyring=bigquery-readonly-mcp \
+  --location=asia-northeast1 \
+  --member="serviceAccount:RUNTIME_SERVICE_ACCOUNT" \
+  --role="roles/cloudkms.cryptoKeyEncrypterDecrypter" \
+  --project=ice-sh
+```
+
+Routine rotation check:
+
+```bash
+gcloud kms keys versions list \
+  --key=oauth-token-encryption \
+  --keyring=bigquery-readonly-mcp \
+  --location=asia-northeast1 \
+  --project=ice-sh
+```
+
+Operational notes:
+
+- Do not disable or destroy old key versions while Firestore may still contain ciphertext encrypted by those versions.
+- Before disabling any old key version, confirm active token records no longer depend on it or run a controlled reauthorization cycle for affected users.
+- If key compromise is suspected, first disable affected OAuth connections with `scripts/manage_oauth_tokens.py disable`, then rotate KMS and force reauthorization. Do not try to keep suspect refresh tokens alive.
+- KMS rotation does not change BigQuery execution identity. It only protects stored OAuth token material.
+
+## Token Lifecycle Review
+
+Run a lightweight monthly review, and run an immediate review after personnel changes, incident response, or OAuth consent changes.
+
+Review checklist:
+
+- Confirm every active token record belongs to an expected `impress.co.jp` user.
+- Confirm `status` distribution: `active`, `reauth_required`, `disabled`, and any deletion-scheduled records.
+- Confirm stale `mcp_sessions` are being rejected by code and cleaned by TTL.
+- Confirm `last_refresh_at` and `last_used_at` patterns match expected use. Long-unused active records should be disabled or forced through reauth.
+- Confirm `last_error_class` and `reauth_required_reason` are reviewed and cleared only by successful reauthorization.
+- Confirm admin actions have matching `oauth_token_admin_action` audit events.
+- Confirm no logs contain token plaintext, ciphertext, authorization code, MCP bearer token, or client secret values.
+
+Suggested action thresholds:
+
+- No use for 30 days: `force_reauth` or `disable`, depending on business need.
+- User removed from the allowed organization or team: `disable` immediately.
+- User deletion request: `delete` after confirming audit and retention expectations.
+- Repeated `invalid_grant`: leave `reauth_required` and ask the user to start `/oauth/authorize` again.
+- Scope or consent change: `force_reauth` for affected users.
+
+Cloud Logging filters:
+
+```text
+jsonPayload.event_type="oauth_token_admin_action"
+```
+
+```text
+jsonPayload.event_type="mcp_session_rejected"
+jsonPayload.error_class="token_record_unavailable"
+```
+
+```text
+jsonPayload.event_type="bigquery_mcp_tool_call"
+jsonPayload.success=false
+```
+
+Keep lifecycle reviews focused on least privilege and auditability: user access should be explainable from OAuth status, BigQuery IAM, MCP session state, and Cloud Logging events.
+
 ## Required Environment Variables
 
 New variables:
@@ -156,4 +297,4 @@ Do not log SQL result rows or token values.
 ## Remaining Implementation Steps
 
 1. Add broader reauth-required handling for scope mismatch and consent changes.
-2. Add operational cleanup guidance for Firestore TTL, KMS rotation, and token record lifecycle reviews.
+2. Validate TTL, KMS rotation, and lifecycle review procedures during Phase F `ice-sh` verification.
