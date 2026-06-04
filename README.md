@@ -176,6 +176,16 @@ Each audit event includes:
 - `bytes_processed`
 - `success`
 - `error`
+- `rejection_reason` for failed or rejected calls
+
+`rejection_reason` uses these categories:
+
+- `project_not_allowed`: `project_id` is outside `ALLOWED_PROJECT_IDS`.
+- `user_not_allowed`: user email is outside `ALLOWED_USER_EMAILS`.
+- `sql_not_allowed`: SQL guard rejected a non-readonly or unsafe query.
+- `bigquery_iam_denied`: BigQuery returned a permission-denied response, including HTTP 403.
+- `bigquery_api_error`: BigQuery or HTTP API failed for a non-403 API reason.
+- `execution_error`: internal execution failed outside the known categories.
 
 Some fields may be empty when the tool does not target a dataset or table, or when validation fails before a BigQuery job is created.
 
@@ -184,6 +194,14 @@ Example Cloud Logging filter:
 ```text
 jsonPayload.event_type="bigquery_mcp_tool_call"
 jsonPayload.project_id="ice-sh"
+```
+
+To inspect rejected calls by category:
+
+```text
+jsonPayload.event_type="bigquery_mcp_tool_call"
+jsonPayload.success=false
+jsonPayload.rejection_reason="bigquery_iam_denied"
 ```
 
 ## Current Phase Coverage
@@ -195,4 +213,4 @@ jsonPayload.project_id="ice-sh"
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS` and `ALLOWED_USER_EMAILS` enforcement plus allow/reject tests are implemented; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
