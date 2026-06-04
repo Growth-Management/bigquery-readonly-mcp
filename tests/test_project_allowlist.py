@@ -1,9 +1,11 @@
+import httpx
 import pytest
 
 from app import bigquery_tools
 from app.bigquery_tools import ProjectNotAllowedError, UserNotAllowedError, call_tool
 from app.config import Settings
 from app.sessions import UserSession
+from app.sql_guard import SqlValidationError
 
 
 def make_settings(
@@ -164,3 +166,113 @@ def test_call_tool_rejects_user_outside_allowlist_before_handler(monkeypatch: py
         )
 
     assert called == []
+
+
+def test_call_tool_audits_sql_rejection_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_events: list[dict[str, object]] = []
+
+    def fake_handler(session: UserSession, args: dict[str, object], settings: Settings) -> dict[str, object]:
+        raise SqlValidationError("Only SELECT or WITH queries are allowed")
+
+    monkeypatch.setitem(bigquery_tools.TOOL_HANDLERS, "fake_tool", fake_handler)
+    monkeypatch.setattr(bigquery_tools, "audit_log", lambda **kwargs: audit_events.append(kwargs))
+
+    with pytest.raises(SqlValidationError):
+        call_tool("fake_tool", make_session(), {"project_id": "ice-sh"}, make_settings())
+
+    assert audit_events[-1]["success"] is False
+    assert audit_events[-1]["extra"] == {"rejection_reason": "sql_not_allowed"}
+
+
+def test_call_tool_audits_project_rejection_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_events: list[dict[str, object]] = []
+
+    def fake_handler(session: UserSession, args: dict[str, object], settings: Settings) -> dict[str, object]:
+        return {"ok": True}
+
+    monkeypatch.setitem(bigquery_tools.TOOL_HANDLERS, "fake_tool", fake_handler)
+    monkeypatch.setattr(bigquery_tools, "audit_log", lambda **kwargs: audit_events.append(kwargs))
+
+    with pytest.raises(ProjectNotAllowedError):
+        call_tool(
+            "fake_tool",
+            make_session(),
+            {"project_id": "ice-qb"},
+            make_settings(allowed_project_ids="ice-sh"),
+        )
+
+    assert audit_events[-1]["success"] is False
+    assert audit_events[-1]["extra"] == {"rejection_reason": "project_not_allowed"}
+
+
+def test_call_tool_audits_user_rejection_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_events: list[dict[str, object]] = []
+
+    def fake_handler(session: UserSession, args: dict[str, object], settings: Settings) -> dict[str, object]:
+        return {"ok": True}
+
+    monkeypatch.setitem(bigquery_tools.TOOL_HANDLERS, "fake_tool", fake_handler)
+    monkeypatch.setattr(bigquery_tools, "audit_log", lambda **kwargs: audit_events.append(kwargs))
+
+    with pytest.raises(UserNotAllowedError):
+        call_tool(
+            "fake_tool",
+            make_session("other@impress.co.jp"),
+            {"project_id": "ice-sh"},
+            make_settings(allowed_user_emails="sinohara@impress.co.jp"),
+        )
+
+    assert audit_events[-1]["success"] is False
+    assert audit_events[-1]["extra"] == {"rejection_reason": "user_not_allowed"}
+
+
+def test_call_tool_audits_bigquery_iam_denied_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_events: list[dict[str, object]] = []
+    request = httpx.Request("POST", "https://bigquery.googleapis.com/bigquery/v2/projects/denied/queries")
+    response = httpx.Response(403, request=request)
+
+    def fake_handler(session: UserSession, args: dict[str, object], settings: Settings) -> dict[str, object]:
+        raise httpx.HTTPStatusError("403 Forbidden", request=request, response=response)
+
+    monkeypatch.setitem(bigquery_tools.TOOL_HANDLERS, "fake_tool", fake_handler)
+    monkeypatch.setattr(bigquery_tools, "audit_log", lambda **kwargs: audit_events.append(kwargs))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        call_tool("fake_tool", make_session(), {"project_id": "denied"}, make_settings())
+
+    assert audit_events[-1]["success"] is False
+    assert audit_events[-1]["extra"] == {"rejection_reason": "bigquery_iam_denied"}
+
+
+def test_call_tool_audits_bigquery_api_error_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_events: list[dict[str, object]] = []
+    request = httpx.Request("POST", "https://bigquery.googleapis.com/bigquery/v2/projects/ice-sh/queries")
+    response = httpx.Response(500, request=request)
+
+    def fake_handler(session: UserSession, args: dict[str, object], settings: Settings) -> dict[str, object]:
+        raise httpx.HTTPStatusError("500 Server Error", request=request, response=response)
+
+    monkeypatch.setitem(bigquery_tools.TOOL_HANDLERS, "fake_tool", fake_handler)
+    monkeypatch.setattr(bigquery_tools, "audit_log", lambda **kwargs: audit_events.append(kwargs))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        call_tool("fake_tool", make_session(), {"project_id": "ice-sh"}, make_settings())
+
+    assert audit_events[-1]["success"] is False
+    assert audit_events[-1]["extra"] == {"rejection_reason": "bigquery_api_error"}
+
+
+def test_call_tool_audits_execution_error_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_events: list[dict[str, object]] = []
+
+    def fake_handler(session: UserSession, args: dict[str, object], settings: Settings) -> dict[str, object]:
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setitem(bigquery_tools.TOOL_HANDLERS, "fake_tool", fake_handler)
+    monkeypatch.setattr(bigquery_tools, "audit_log", lambda **kwargs: audit_events.append(kwargs))
+
+    with pytest.raises(RuntimeError):
+        call_tool("fake_tool", make_session(), {"project_id": "ice-sh"}, make_settings())
+
+    assert audit_events[-1]["success"] is False
+    assert audit_events[-1]["extra"] == {"rejection_reason": "execution_error"}
