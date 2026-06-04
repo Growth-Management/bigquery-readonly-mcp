@@ -19,7 +19,7 @@ Phase 8 should now focus on controlled multi-project rollout, not on changing th
 
 ## Implemented Phase 8 Controls
 
-The following Phase 8 controls are implemented:
+The following Phase 8 controls are implemented or evaluated:
 
 - `ALLOWED_PROJECT_IDS` environment variable.
 - `ALLOWED_USER_EMAILS` environment variable.
@@ -34,6 +34,8 @@ The following Phase 8 controls are implemented:
 - `list_projects` is filtered to allowed projects when `ALLOWED_PROJECT_IDS` is set.
 - Unit tests cover empty allowlists, allowed project, rejected project, default-project rejection, allowed user, rejected user, case-insensitive email matching, SQL guard rejection category, BigQuery IAM-denied category, BigQuery API-error category, and generic execution-error category.
 - BigQuery audit dataset export has been evaluated. Cloud Logging remains the required audit sink; BigQuery export is recommended only when retention, reporting, or dashboard requirements need it.
+- Query history UI has been evaluated. It is not required for initial rollout; build it only after exported audit data and administrator review requirements are confirmed.
+- Project-scoped dataset allowlist has been evaluated. BigQuery IAM remains the primary dataset boundary; application-side dataset allowlist is optional and should be added only for stricter operational policy.
 - The initial Cloud Run deployment sets `ALLOWED_PROJECT_IDS=ice-sh` and leaves `ALLOWED_USER_EMAILS` empty.
 
 ## Principles
@@ -52,12 +54,12 @@ The following Phase 8 controls are implemented:
 | Area | Phase 8 decision | Reason |
 | --- | --- | --- |
 | Project allowlist | Implemented with `ALLOWED_PROJECT_IDS`. Each Cloud Run deployment should set the intended project list. | Prevents accidental cross-project use while preserving the generic `project_id` tool design. |
-| Dataset allowlist | Use BigQuery IAM first. Grant `roles/bigquery.dataViewer` at dataset scope wherever possible. Add an application-side dataset allowlist only when operational policy requires a stricter boundary than IAM. | Dataset-level IAM is the source of truth and avoids duplicating access policy in the MCP service unless there is a clear control need. |
+| Dataset allowlist | Evaluated. Use BigQuery IAM first. Grant `roles/bigquery.dataViewer` at dataset scope wherever possible. Add project-scoped `ALLOWED_DATASET_IDS` only when operational policy requires a stricter boundary than IAM. | Dataset-level IAM is the source of truth; app-side dataset allowlist is useful as a defense-in-depth control but adds policy duplication and maintenance. |
 | User allowlist | Implemented with optional `ALLOWED_USER_EMAILS`. Keep it empty for normal domain+IAM operation; set it for sensitive deployments or limited pilots. | Keeps onboarding simple by default while supporting named-user restriction when needed. |
 | Domain allowlist | Required. Initial value: `impress.co.jp`. | Blocks non-company Google accounts before BigQuery access is attempted. |
 | Per-project policy | Required. Cloud Run, Artifact Registry, Secret Manager, WIF, deploy service account, GitHub Secrets, OAuth redirect URI, and health check must be managed per GCP project. | Keeps blast radius and deployment ownership clear. |
 | BigQuery audit dataset | Evaluated. Keep Cloud Logging as the required audit source now. Add BigQuery export through a Log Router sink when retention, reporting, dashboard, or cross-project review requirements are confirmed. | Avoids adding storage and IAM surface before there is an operational need, while leaving a clear path for durable audit analytics. |
-| Query history UI | Follow-up improvement, not required for initial operation. | Audit logs are enough for the initial controlled rollout. |
+| Query history UI | Evaluated. Do not build for initial rollout. Consider a thin admin-only UI only after audit export/query history requirements are confirmed. | Cloud Logging is enough now; a UI adds authentication, authorization, filtering, and privacy-review work. |
 | IAM Deny policy | Not required for normal operation. Use only for validation, break-glass restrictions, or explicit security boundaries. | Standard access should be governed by Google OAuth identity plus BigQuery IAM. Deny policies are powerful and should stay exceptional. |
 
 ## Rollout Patterns
@@ -191,6 +193,7 @@ Copy this section for each new project rollout.
 | DDL rejection | Rejected before BigQuery execution |  |  |
 | Project outside `ALLOWED_PROJECT_IDS` | Rejected before BigQuery execution |  |  |
 | User outside `ALLOWED_USER_EMAILS`, if configured | Rejected before BigQuery execution |  |  |
+| Dataset outside project-scoped allowlist, if configured | Rejected before BigQuery execution |  |  |
 | Unauthorized project / denied job creation | Error, not successful MCP response |  |  |
 | Audit log success case | `success=true` record present |  |  |
 | Audit log rejection case | `success=false` record present with expected `rejection_reason` |  |  |
@@ -202,6 +205,7 @@ Copy this section for each new project rollout.
 | Disable MCP connector |  |  |  |
 | Remove project from `ALLOWED_PROJECT_IDS` |  |  |  |
 | Remove user from `ALLOWED_USER_EMAILS` |  |  |  |
+| Remove dataset from project-scoped dataset allowlist, if configured |  |  |  |
 | Remove Cloud Run invoker access if restricted |  |  |  |
 | Revert GitHub deployment |  |  |  |
 | Delete Cloud Run service if needed |  |  |  |
@@ -245,10 +249,10 @@ ALLOWED_PROJECT_IDS=ice-sh,another-project
 ALLOWED_USER_EMAILS=sinohara@impress.co.jp,another-user@impress.co.jp
 ```
 
-Planned environment variables:
+Evaluated but not implemented by default:
 
 ```text
-ALLOWED_DATASET_IDS=
+ALLOWED_DATASET_IDS=ice-sh:ice_sh_datamart,ice-sh:ice_sh_source
 ```
 
 Current behavior:
@@ -259,7 +263,7 @@ Current behavior:
 - Empty `ALLOWED_USER_EMAILS` means domain allowlist plus BigQuery IAM controls users.
 - Non-empty `ALLOWED_USER_EMAILS` rejects tool calls from users outside the list before BigQuery API calls.
 - Email matching for `ALLOWED_USER_EMAILS` is case-insensitive.
-- Dataset allowlist remains planned and should be optional and scoped by project.
+- Dataset allowlist remains optional. If implemented, it must be project-scoped and should never grant access beyond BigQuery IAM.
 
 ## Required Validation For Each Rollout
 
@@ -277,8 +281,9 @@ Repeat the Phase 7 validation with the target project:
 10. DDL is rejected before BigQuery execution.
 11. Project outside `ALLOWED_PROJECT_IDS` is rejected before BigQuery execution.
 12. User outside `ALLOWED_USER_EMAILS`, when configured, is rejected before BigQuery execution.
-13. Unauthorized project or denied job creation returns an error, not a successful MCP response.
-14. Cloud Logging records successful reads and failed/rejected attempts with `success`, `error`, `rejection_reason`, `user_email`, `tool`, and `project_id`.
+13. Dataset outside project-scoped dataset allowlist, when configured, is rejected before BigQuery execution.
+14. Unauthorized project or denied job creation returns an error, not a successful MCP response.
+15. Cloud Logging records successful reads and failed/rejected attempts with `success`, `error`, `rejection_reason`, `user_email`, `tool`, and `project_id`.
 
 Use a small validation table and avoid company-sensitive data in validation output.
 
@@ -446,6 +451,147 @@ Before declaring BigQuery export ready:
 
 Total estimate: about 1.0-2.5 hours, depending on IAM approval speed and whether the audit dataset already exists.
 
+## Query History UI Evaluation
+
+Status: evaluated in Phase 8 P2. Do not build a query history UI for the initial rollout. Cloud Logging is enough for immediate investigation, and BigQuery audit export is the better next foundation if recurring review is needed.
+
+### Recommendation
+
+Defer UI implementation until all of these are true:
+
+- Administrators have a recurring review workflow that Cloud Logging filters do not satisfy.
+- Audit events are exported to BigQuery or another durable queryable store.
+- The intended viewers and retention policy are approved.
+- The UI scope is limited to audit metadata, not query result data.
+
+The first version should be an admin-only audit browser, not a user-facing analytics product.
+
+### Minimum Useful UI
+
+If implemented, the first version should support:
+
+- Date range filter.
+- User email filter.
+- BigQuery project filter.
+- Tool filter.
+- Success / failure filter.
+- `rejection_reason` filter.
+- Dataset and table filters when present.
+- Detail view for a single audit event.
+
+Avoid showing query result rows. If SQL text is added later, treat it as sensitive and review retention and masking rules first.
+
+### Why It Is Not Needed Now
+
+A UI would add:
+
+- Authentication and authorization work for administrators.
+- A new frontend or internal app surface to maintain.
+- Privacy review for user activity data.
+- Retention and access-control decisions that are not yet required.
+
+Cloud Logging and optional BigQuery export cover the current audit need with less operational surface.
+
+### Adoption Trigger
+
+Revisit UI implementation when at least one of these appears:
+
+- Multiple deployments need daily or weekly audit review.
+- Security needs a dashboard by user, project, tool, and rejection category.
+- BigQuery audit export is enabled and administrators cannot use SQL/Looker Studio comfortably.
+- Incident response repeatedly needs the same manual log investigation steps.
+
+### Estimated Effort
+
+| Task | Estimated time |
+| --- | --- |
+| Confirm viewers, retention, and privacy requirements | 30-60 minutes |
+| Define audit source and query contract | 30-60 minutes |
+| Build minimal admin-only UI | 0.5-1.5 days |
+| Add access control and deployment path | 0.5-1.0 day |
+| Validate filters and audit visibility | 0.5 day |
+
+Total estimate: about 1.5-4.0 days after audit export and access policy are defined.
+
+## Project-Scoped Dataset Allowlist Evaluation
+
+Status: evaluated in Phase 8 P2. Do not implement as a required control for the initial rollout. BigQuery IAM remains the primary dataset boundary. Add an application-side dataset allowlist only when operational policy needs a stricter or easier-to-disable boundary than IAM alone.
+
+### Recommendation
+
+If implemented, use a project-scoped allowlist such as:
+
+```text
+ALLOWED_DATASET_IDS=ice-sh:ice_sh_datamart,ice-sh:ice_sh_source
+```
+
+The allowlist must only restrict access. It must never grant access beyond the logged-in user's BigQuery IAM.
+
+### When To Enable
+
+Enable a project-scoped dataset allowlist when at least one of these is true:
+
+- Target users have broad project-level BigQuery permissions that cannot be narrowed quickly.
+- A rollout should expose only a small set of approved datasets during a pilot.
+- The data owner wants an application-level kill switch for a dataset.
+- Multiple datasets exist in the same project but only some are approved for ChatGPT access.
+- Dataset IAM is inherited or group-based in a way that is hard to review during rollout.
+
+Do not enable it as a replacement for IAM cleanup. The preferred long-term boundary is still dataset-level BigQuery IAM.
+
+### Scope And Behavior
+
+If built, apply dataset allowlist checks before BigQuery API calls for tools that target or reveal datasets:
+
+- `list_datasets`: return only allowed datasets for the requested project.
+- `list_tables`: reject if `project_id:dataset_id` is not allowed.
+- `get_table_schema`: reject if `project_id:dataset_id` is not allowed.
+- `dry_run_query`: hard to enforce safely without SQL parsing for referenced datasets; keep this out of scope unless reliable table-reference extraction is added.
+- `run_readonly_query`: hard to enforce safely without SQL parsing for referenced datasets; keep this out of scope unless reliable table-reference extraction is added.
+
+For query tools, avoid ad hoc string parsing. Use BigQuery IAM and SQL guard until a reliable parser or BigQuery job metadata strategy is approved.
+
+### Audit Requirements
+
+If implemented, dataset allowlist rejections should use:
+
+```text
+rejection_reason="dataset_not_allowed"
+```
+
+Audit logs should include `project_id`, `dataset`, `tool`, `user_email`, `success=false`, and the rejection reason.
+
+### Risks
+
+- Duplicates policy already represented in BigQuery IAM.
+- Can become stale when datasets are renamed or new datasets are added.
+- Query SQL may reference multiple datasets, views, or authorized views that are not obvious from a simple tool argument.
+- Overly strict allowlists can block legitimate reads even when IAM allows them.
+
+### Validation Plan
+
+Before declaring dataset allowlist ready:
+
+1. Configure one allowed dataset and one denied dataset in the same project.
+2. Confirm `list_datasets` hides the denied dataset.
+3. Confirm `list_tables` and `get_table_schema` succeed for the allowed dataset.
+4. Confirm `list_tables` and `get_table_schema` reject the denied dataset before BigQuery API calls.
+5. Confirm the rejection audit log includes `rejection_reason="dataset_not_allowed"`.
+6. Confirm query tools still rely on SQL guard plus BigQuery IAM unless reliable reference extraction is implemented.
+7. Confirm removing a dataset from the allowlist is an effective rollback step.
+
+### Estimated Effort
+
+| Task | Estimated time |
+| --- | --- |
+| Define configuration format and docs | 30-60 minutes |
+| Implement allowlist parsing and enforcement for dataset-targeting tools | 0.5 day |
+| Add unit tests and audit category tests | 0.5 day |
+| Validate on Cloud Run with allowed and denied datasets | 30-60 minutes |
+| Decide whether query-tool reference extraction is needed | 30-90 minutes |
+
+Total estimate: about 1.0-2.0 days for metadata tools only, or longer if query SQL reference extraction is required.
+
 ## Phase 8 Implementation Backlog
 
 | Priority | Status | Item | Purpose |
@@ -456,15 +602,15 @@ Total estimate: about 1.0-2.5 hours, depending on IAM approval speed and whether
 | P1 | Complete | Add audit fields for rejection reason category. | Project, user, SQL guard, BigQuery IAM denied, BigQuery API error, and execution-error failures are categorized. |
 | P1 | Complete | Document per-project rollout template. | Make future rollouts repeatable. |
 | P2 | Complete | Evaluate BigQuery audit dataset export. | Cloud Logging remains required; Log Router to BigQuery is the recommended optional path when retention/reporting requirements exist. |
-| P2 | Open | Consider query history UI. | Give administrators a review surface without raw log browsing. |
-| P2 | Open | Consider project-scoped dataset allowlist. | Add an application boundary when IAM is too broad for operational policy. |
+| P2 | Complete | Consider query history UI. | Not required now; defer until audit export and administrator review requirements are confirmed. |
+| P2 | Complete | Consider project-scoped dataset allowlist. | Optional defense-in-depth; implement only when IAM is too broad or rollout policy needs a dataset kill switch. |
 
 ## Follow-Up Hardening Candidates
 
 These are not required to complete the initial `ice-sh` rollout, but should be considered before broad multi-project use:
 
-- Optional dataset allowlist for deployments where IAM alone is not enough for operational policy.
+- Optional project-scoped dataset allowlist for deployments where IAM alone is not enough for operational policy.
 - Implement BigQuery audit dataset export after retention and reporting requirements are confirmed.
-- Query history UI for administrators.
+- Query history UI for administrators after audit export and review requirements are confirmed.
 - Dedicated runtime service account instead of the default compute service account.
 - Persistent OAuth/session storage if Cloud Run restarts or session longevity become operational issues.
