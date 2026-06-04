@@ -19,14 +19,17 @@ Phase 8 should now focus on controlled multi-project rollout, not on changing th
 
 ## Implemented Phase 8 Controls
 
-The following Phase 8 P0 controls are implemented:
+The following Phase 8 controls are implemented:
 
 - `ALLOWED_PROJECT_IDS` environment variable.
+- `ALLOWED_USER_EMAILS` environment variable.
 - BigQuery tool calls for projects outside `ALLOWED_PROJECT_IDS` are rejected before BigQuery API calls.
+- BigQuery tool calls from users outside `ALLOWED_USER_EMAILS` are rejected before BigQuery API calls.
 - Rejected project calls are written to audit logs with `success=false` and `rejection_reason="project_not_allowed"`.
+- Rejected user calls are written to audit logs with `success=false` and `rejection_reason="user_not_allowed"`.
 - `list_projects` is filtered to allowed projects when `ALLOWED_PROJECT_IDS` is set.
-- Unit tests cover empty allowlist, allowed project, rejected project, and default-project rejection cases.
-- The initial Cloud Run deployment sets `ALLOWED_PROJECT_IDS=ice-sh`.
+- Unit tests cover empty allowlists, allowed project, rejected project, default-project rejection, allowed user, rejected user, and case-insensitive email matching.
+- The initial Cloud Run deployment sets `ALLOWED_PROJECT_IDS=ice-sh` and leaves `ALLOWED_USER_EMAILS` empty.
 
 ## Principles
 
@@ -45,7 +48,7 @@ The following Phase 8 P0 controls are implemented:
 | --- | --- | --- |
 | Project allowlist | Implemented with `ALLOWED_PROJECT_IDS`. Each Cloud Run deployment should set the intended project list. | Prevents accidental cross-project use while preserving the generic `project_id` tool design. |
 | Dataset allowlist | Use BigQuery IAM first. Grant `roles/bigquery.dataViewer` at dataset scope wherever possible. Add an application-side dataset allowlist only when operational policy requires a stricter boundary than IAM. | Dataset-level IAM is the source of truth and avoids duplicating access policy in the MCP service unless there is a clear control need. |
-| User allowlist | Use Google OAuth domain allowlist plus BigQuery IAM for initial operation. Add `ALLOWED_USER_EMAILS` only for sensitive deployments or limited pilots. | Keeps onboarding simple while still requiring the user's own Google identity and IAM permissions. |
+| User allowlist | Implemented with optional `ALLOWED_USER_EMAILS`. Keep it empty for normal domain+IAM operation; set it for sensitive deployments or limited pilots. | Keeps onboarding simple by default while supporting named-user restriction when needed. |
 | Domain allowlist | Required. Initial value: `impress.co.jp`. | Blocks non-company Google accounts before BigQuery access is attempted. |
 | Per-project policy | Required. Cloud Run, Artifact Registry, Secret Manager, WIF, deploy service account, GitHub Secrets, OAuth redirect URI, and health check must be managed per GCP project. | Keeps blast radius and deployment ownership clear. |
 | BigQuery audit dataset | Follow-up hardening, not required for initial operation. Cloud Logging is required now. | Cloud Logging satisfies Phase 7 audit verification; BigQuery persistence can be added once retention/reporting requirements are clear. |
@@ -71,6 +74,7 @@ Default behavior:
 
 - `DEFAULT_PROJECT_ID` is the target analytics project.
 - `ALLOWED_PROJECT_IDS` contains only that project and explicitly approved adjacent projects.
+- `ALLOWED_USER_EMAILS` is empty unless the deployment is a named-user pilot.
 - Cloud Logging remains in the deployment project.
 
 ### Pattern B: Shared Cloud Run Deployment With Multiple Allowed Projects
@@ -86,6 +90,7 @@ Recommended for:
 Required controls:
 
 - Set `ALLOWED_PROJECT_IDS` for every approved project.
+- Optionally set `ALLOWED_USER_EMAILS` for named-user pilots.
 - Document every allowed project and owner.
 - Confirm audit filters can separate project activity.
 
@@ -105,12 +110,12 @@ For every new project, create or confirm the following:
 6. Deploy service account has deployment permissions only.
 7. Workload Identity Federation binding is restricted to `Growth-Management/bigquery-readonly-mcp`.
 8. GitHub Secrets are set for that deployment target: `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOY_SERVICE_ACCOUNT`, and `BASE_URL`.
-9. Cloud Run environment variables are set for the target project, allowed projects, domain, and limits.
+9. Cloud Run environment variables are set for the target project, allowed projects, allowed users if any, domain, and limits.
 10. OAuth redirect URI and `BASE_URL` match exactly.
 11. External health check uses `/health`, not `/healthz`.
 12. BigQuery IAM grants are reviewed at project, dataset, table/view, folder, organization, Google Group, and domain levels.
 13. Phase 7 validation is repeated for the target project before opening use to more users.
-14. Rollback steps are documented: disable connector, remove Cloud Run invoker access, remove project allowlist entry, or delete the deployment.
+14. Rollback steps are documented: disable connector, remove Cloud Run invoker access, remove project/user allowlist entry, or delete the deployment.
 
 ## BigQuery IAM Policy
 
@@ -129,7 +134,7 @@ Before declaring a project ready, check all possible access paths:
 - Dataset access entries such as `userByEmail`, `groupByEmail`, `domain`, and `specialGroup`.
 - Authorized views or linked datasets if they are part of the analysis path.
 
-The MCP should not compensate for excessive BigQuery IAM. If a user can query a dataset through BigQuery IAM and the project is allowed by `ALLOWED_PROJECT_IDS`, the MCP should generally allow the readonly request and audit it.
+The MCP should not compensate for excessive BigQuery IAM. If a user can query a dataset through BigQuery IAM and the project is allowed by `ALLOWED_PROJECT_IDS`, the MCP should generally allow the readonly request and audit it. Use `ALLOWED_USER_EMAILS` only when the deployment itself must be restricted to named users.
 
 ## Application-Side Allowlist Policy
 
@@ -139,12 +144,12 @@ Implemented environment variables:
 
 ```text
 ALLOWED_PROJECT_IDS=ice-sh,another-project
+ALLOWED_USER_EMAILS=sinohara@impress.co.jp,another-user@impress.co.jp
 ```
 
 Planned environment variables:
 
 ```text
-ALLOWED_USER_EMAILS=
 ALLOWED_DATASET_IDS=
 ```
 
@@ -154,7 +159,8 @@ Current behavior:
 - Non-empty `ALLOWED_PROJECT_IDS` rejects tool calls for projects outside the list before BigQuery API calls.
 - `list_projects` returns only allowed projects when `ALLOWED_PROJECT_IDS` is set.
 - Empty `ALLOWED_USER_EMAILS` means domain allowlist plus BigQuery IAM controls users.
-- Non-empty `ALLOWED_USER_EMAILS` is planned for limited pilots and sensitive deployments.
+- Non-empty `ALLOWED_USER_EMAILS` rejects tool calls from users outside the list before BigQuery API calls.
+- Email matching for `ALLOWED_USER_EMAILS` is case-insensitive.
 - Dataset allowlist remains planned and should be optional and scoped by project.
 
 Security reason:
@@ -178,8 +184,9 @@ Repeat the Phase 7 validation with the target project:
 9. DML is rejected before BigQuery execution.
 10. DDL is rejected before BigQuery execution.
 11. Project outside `ALLOWED_PROJECT_IDS` is rejected before BigQuery execution.
-12. Unauthorized project or denied job creation returns an error, not a successful MCP response.
-13. Cloud Logging records successful reads and failed/rejected attempts with `success`, `error`, `user_email`, `tool`, and `project_id`.
+12. User outside `ALLOWED_USER_EMAILS`, when configured, is rejected before BigQuery execution.
+13. Unauthorized project or denied job creation returns an error, not a successful MCP response.
+14. Cloud Logging records successful reads and failed/rejected attempts with `success`, `error`, `user_email`, `tool`, and `project_id`.
 
 Use a small validation table and avoid company-sensitive data in validation output.
 
@@ -216,6 +223,11 @@ jsonPayload.event_type="bigquery_mcp_tool_call"
 jsonPayload.rejection_reason="project_not_allowed"
 ```
 
+```text
+jsonPayload.event_type="bigquery_mcp_tool_call"
+jsonPayload.rejection_reason="user_not_allowed"
+```
+
 ## Phase 8 Implementation Backlog
 
 The following backlog turns this policy into product controls:
@@ -224,8 +236,8 @@ The following backlog turns this policy into product controls:
 | --- | --- | --- | --- |
 | P0 | Complete | Implement `ALLOWED_PROJECT_IDS` enforcement. | Prevent cross-project use from a shared deployment. |
 | P0 | Complete | Add tests for allowed and rejected project IDs. | Prove allowlist behavior before broad rollout. |
-| P1 | Open | Implement optional `ALLOWED_USER_EMAILS`. | Support limited pilots and sensitive deployments. |
-| P1 | Partial | Add audit fields for rejection reason category. | Project allowlist rejection now records `project_not_allowed`; other categories still need structure. |
+| P1 | Complete | Implement optional `ALLOWED_USER_EMAILS`. | Support limited pilots and sensitive deployments. |
+| P1 | Partial | Add audit fields for rejection reason category. | Project and user allowlist rejections are categorized; SQL guard and BigQuery API errors still need structured categories. |
 | P1 | Open | Document per-project rollout template. | Make future rollouts repeatable. |
 | P2 | Open | Evaluate BigQuery audit dataset export. | Support retention, reporting, and dashboards beyond Cloud Logging. |
 | P2 | Open | Consider query history UI. | Give administrators a review surface without raw log browsing. |
@@ -235,7 +247,6 @@ The following backlog turns this policy into product controls:
 
 These are not required to complete the initial `ice-sh` rollout, but should be considered before broad multi-project use:
 
-- Optional `ALLOWED_USER_EMAILS` for sensitive deployments.
 - Optional dataset allowlist for deployments where IAM alone is not enough for operational policy.
 - BigQuery audit dataset export.
 - Query history UI for administrators.
