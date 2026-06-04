@@ -15,6 +15,7 @@ from app.sql_guard import SqlValidationError, validate_readonly_sql
 BIGQUERY_API = "https://bigquery.googleapis.com/bigquery/v2"
 
 REJECTION_PROJECT_NOT_ALLOWED = "project_not_allowed"
+REJECTION_DATASET_NOT_ALLOWED = "dataset_not_allowed"
 REJECTION_USER_NOT_ALLOWED = "user_not_allowed"
 REJECTION_SQL_NOT_ALLOWED = "sql_not_allowed"
 REJECTION_BIGQUERY_IAM_DENIED = "bigquery_iam_denied"
@@ -23,6 +24,10 @@ REJECTION_EXECUTION_ERROR = "execution_error"
 
 
 class ProjectNotAllowedError(ValueError):
+    pass
+
+
+class DatasetNotAllowedError(ValueError):
     pass
 
 
@@ -58,6 +63,10 @@ def _project(args: dict[str, Any], settings: Settings) -> str:
     return str(args.get("project_id") or settings.default_project_id)
 
 
+def _dataset_key(project_id: str, dataset_id: str) -> str:
+    return f"{project_id}:{dataset_id}"
+
+
 def _enforce_user_allowed(session: UserSession, settings: Settings) -> None:
     allowed_user_emails = settings.allowed_user_email_set
     user_email = session.email.lower()
@@ -70,6 +79,14 @@ def _enforce_project_allowed(project_id: str, settings: Settings) -> None:
     if allowed_project_ids and project_id not in allowed_project_ids:
         allowed = ", ".join(sorted(allowed_project_ids))
         raise ProjectNotAllowedError(f"Project is not allowed by ALLOWED_PROJECT_IDS: {project_id}. Allowed projects: {allowed}")
+
+
+def _enforce_dataset_allowed(project_id: str, dataset_id: str, settings: Settings) -> None:
+    allowed_dataset_ids = settings.allowed_dataset_id_set
+    dataset_key = _dataset_key(project_id, dataset_id)
+    if allowed_dataset_ids and dataset_key not in allowed_dataset_ids:
+        allowed = ", ".join(sorted(allowed_dataset_ids))
+        raise DatasetNotAllowedError(f"Dataset is not allowed by ALLOWED_DATASET_IDS: {dataset_key}. Allowed datasets: {allowed}")
 
 
 def _query_headers(session: UserSession) -> dict[str, str]:
@@ -215,13 +232,19 @@ def list_projects(session: UserSession, args: dict[str, Any], settings: Settings
 def list_datasets(session: UserSession, args: dict[str, Any], settings: Settings) -> dict[str, Any]:
     project_id = _project(args, settings)
     client = _client(session, project_id)
-    datasets = [{"dataset_id": dataset.dataset_id, "full_dataset_id": dataset.full_dataset_id} for dataset in client.list_datasets(project=project_id)]
+    allowed_dataset_ids = settings.allowed_dataset_id_set
+    datasets = [
+        {"dataset_id": dataset.dataset_id, "full_dataset_id": dataset.full_dataset_id}
+        for dataset in client.list_datasets(project=project_id)
+        if not allowed_dataset_ids or _dataset_key(project_id, dataset.dataset_id) in allowed_dataset_ids
+    ]
     return {"project_id": project_id, "datasets": datasets}
 
 
 def list_tables(session: UserSession, args: dict[str, Any], settings: Settings) -> dict[str, Any]:
     project_id = _project(args, settings)
     dataset_id = str(args["dataset_id"])
+    _enforce_dataset_allowed(project_id, dataset_id, settings)
     client = _client(session, project_id)
     dataset_ref = bigquery.DatasetReference(project_id, dataset_id)
     tables = [
@@ -235,6 +258,7 @@ def get_table_schema(session: UserSession, args: dict[str, Any], settings: Setti
     project_id = _project(args, settings)
     dataset_id = str(args["dataset_id"])
     table_id = str(args["table_id"])
+    _enforce_dataset_allowed(project_id, dataset_id, settings)
     client = _client(session, project_id)
     table = client.get_table(bigquery.TableReference(bigquery.DatasetReference(project_id, dataset_id), table_id))
     schema = [
@@ -337,6 +361,16 @@ def call_tool(name: str, session: UserSession, args: dict[str, Any], settings: S
             args=args,
             error=exc,
             rejection_reason=REJECTION_PROJECT_NOT_ALLOWED,
+        )
+        raise
+    except DatasetNotAllowedError as exc:
+        _audit_failure(
+            session=session,
+            tool=name,
+            project_id=project_id,
+            args=args,
+            error=exc,
+            rejection_reason=REJECTION_DATASET_NOT_ALLOWED,
         )
         raise
     except Exception as exc:
