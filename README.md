@@ -139,7 +139,7 @@ See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the pre
 
 See [`docs/phase-7-ice-sh-validation.md`](docs/phase-7-ice-sh-validation.md) for the Phase 7 validation record.
 
-See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, and follow-up hardening. The same document includes the per-project rollout record template and BigQuery audit dataset export evaluation.
+See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, and follow-up hardening. The same document includes the per-project rollout record template, BigQuery audit dataset export evaluation, query history UI evaluation, and project-scoped dataset allowlist evaluation.
 
 ## Initial Validation On ice-sh
 
@@ -162,7 +162,7 @@ Current status as of 2026-06-04: Phase 7 validation is complete. `ice-sh` readon
 
 Every tool call writes a single-line JSON audit event to stdout. Cloud Run ingests stdout into Cloud Logging, where the `message`, `event_type`, `severity`, and tool-specific fields can be filtered.
 
-Cloud Logging is the required audit source. BigQuery audit dataset export has been evaluated as an optional Phase 8 P2 hardening path, recommended through a Cloud Logging Log Router sink when retention, reporting, or dashboard requirements justify it.
+Cloud Logging is the required audit source. BigQuery audit dataset export has been evaluated as an optional Phase 8 P2 hardening path, recommended through a Cloud Logging Log Router sink when retention, reporting, or dashboard requirements justify it. Query history UI is deferred until exported audit data and administrator review requirements are confirmed.
 
 Each audit event includes:
 
@@ -215,4 +215,4 @@ jsonPayload.rejection_reason="bigquery_iam_denied"
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; BigQuery audit dataset export is evaluated as optional Log Router hardening; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; BigQuery audit dataset export, query history UI, and project-scoped dataset allowlist are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
