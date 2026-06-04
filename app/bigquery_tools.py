@@ -14,6 +14,10 @@ from app.sql_guard import SqlValidationError, validate_readonly_sql
 BIGQUERY_API = "https://bigquery.googleapis.com/bigquery/v2"
 
 
+class ProjectNotAllowedError(ValueError):
+    pass
+
+
 class AccessTokenCredentials(Credentials):
     def __init__(self, token: str) -> None:
         super().__init__()
@@ -40,6 +44,13 @@ def _client(session: UserSession, project_id: str) -> bigquery.Client:
 
 def _project(args: dict[str, Any], settings: Settings) -> str:
     return str(args.get("project_id") or settings.default_project_id)
+
+
+def _enforce_project_allowed(project_id: str, settings: Settings) -> None:
+    allowed_project_ids = settings.allowed_project_id_set
+    if allowed_project_ids and project_id not in allowed_project_ids:
+        allowed = ", ".join(sorted(allowed_project_ids))
+        raise ProjectNotAllowedError(f"Project is not allowed by ALLOWED_PROJECT_IDS: {project_id}. Allowed projects: {allowed}")
 
 
 def _query_headers(session: UserSession) -> dict[str, str]:
@@ -139,6 +150,9 @@ def list_projects(session: UserSession, args: dict[str, Any], settings: Settings
     project_id = _project(args, settings)
     client = _client(session, project_id)
     projects = [{"project_id": project.project_id, "friendly_name": project.friendly_name} for project in client.list_projects()]
+    allowed_project_ids = settings.allowed_project_id_set
+    if allowed_project_ids:
+        projects = [project for project in projects if project["project_id"] in allowed_project_ids]
     return {"projects": projects}
 
 
@@ -224,8 +238,9 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
 
 def call_tool(name: str, session: UserSession, args: dict[str, Any], settings: Settings) -> dict[str, Any]:
     handler = TOOL_HANDLERS[name]
-    project_id = args.get("project_id") or settings.default_project_id
+    project_id = str(args.get("project_id") or settings.default_project_id)
     try:
+        _enforce_project_allowed(project_id, settings)
         result = handler(session, args, settings)
         audit_log(
             user_email=session.email,
@@ -239,6 +254,18 @@ def call_tool(name: str, session: UserSession, args: dict[str, Any], settings: S
         return result
     except SqlValidationError as exc:
         audit_log(user_email=session.email, tool=name, project_id=str(project_id), success=False, error=str(exc))
+        raise
+    except ProjectNotAllowedError as exc:
+        audit_log(
+            user_email=session.email,
+            tool=name,
+            project_id=str(project_id),
+            dataset=args.get("dataset_id"),
+            table=args.get("table_id"),
+            success=False,
+            error=str(exc),
+            extra={"rejection_reason": "project_not_allowed"},
+        )
         raise
     except Exception as exc:
         audit_log(
