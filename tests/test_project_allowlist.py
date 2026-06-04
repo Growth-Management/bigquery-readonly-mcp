@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 from app import bigquery_tools
-from app.bigquery_tools import ProjectNotAllowedError, UserNotAllowedError, call_tool
+from app.bigquery_tools import DatasetNotAllowedError, ProjectNotAllowedError, UserNotAllowedError, call_tool
 from app.config import Settings
 from app.sessions import UserSession
 from app.sql_guard import SqlValidationError
@@ -12,6 +12,7 @@ def make_settings(
     *,
     default_project_id: str = "ice-sh",
     allowed_project_ids: str = "",
+    allowed_dataset_ids: str = "",
     allowed_user_emails: str = "",
 ) -> Settings:
     return Settings(
@@ -20,6 +21,7 @@ def make_settings(
         GOOGLE_OAUTH_CLIENT_SECRET="test-client-secret",
         DEFAULT_PROJECT_ID=default_project_id,
         ALLOWED_PROJECT_IDS=allowed_project_ids,
+        ALLOWED_DATASET_IDS=allowed_dataset_ids,
         ALLOWED_USER_EMAILS=allowed_user_emails,
     )
 
@@ -168,6 +170,58 @@ def test_call_tool_rejects_user_outside_allowlist_before_handler(monkeypatch: py
     assert called == []
 
 
+def test_list_datasets_filters_to_allowed_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeDataset:
+        def __init__(self, dataset_id: str) -> None:
+            self.dataset_id = dataset_id
+            self.full_dataset_id = f"ice-sh:{dataset_id}"
+
+    class FakeClient:
+        def list_datasets(self, project: str) -> list[FakeDataset]:
+            return [FakeDataset("allowed_dataset"), FakeDataset("denied_dataset")]
+
+    monkeypatch.setattr(bigquery_tools, "_client", lambda session, project_id: FakeClient())
+
+    result = bigquery_tools.list_datasets(
+        make_session(),
+        {"project_id": "ice-sh"},
+        make_settings(allowed_dataset_ids="ice-sh:allowed_dataset"),
+    )
+
+    assert result == {
+        "project_id": "ice-sh",
+        "datasets": [{"dataset_id": "allowed_dataset", "full_dataset_id": "ice-sh:allowed_dataset"}],
+    }
+
+
+def test_list_tables_rejects_dataset_outside_allowlist_before_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[str] = []
+    monkeypatch.setattr(bigquery_tools, "_client", lambda session, project_id: called.append("client-called"))
+
+    with pytest.raises(DatasetNotAllowedError, match="Dataset is not allowed by ALLOWED_DATASET_IDS: ice-sh:denied_dataset"):
+        bigquery_tools.list_tables(
+            make_session(),
+            {"project_id": "ice-sh", "dataset_id": "denied_dataset"},
+            make_settings(allowed_dataset_ids="ice-sh:allowed_dataset"),
+        )
+
+    assert called == []
+
+
+def test_get_table_schema_rejects_dataset_outside_allowlist_before_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[str] = []
+    monkeypatch.setattr(bigquery_tools, "_client", lambda session, project_id: called.append("client-called"))
+
+    with pytest.raises(DatasetNotAllowedError, match="Dataset is not allowed by ALLOWED_DATASET_IDS: ice-sh:denied_dataset"):
+        bigquery_tools.get_table_schema(
+            make_session(),
+            {"project_id": "ice-sh", "dataset_id": "denied_dataset", "table_id": "some_table"},
+            make_settings(allowed_dataset_ids="ice-sh:allowed_dataset"),
+        )
+
+    assert called == []
+
+
 def test_call_tool_audits_sql_rejection_category(monkeypatch: pytest.MonkeyPatch) -> None:
     audit_events: list[dict[str, object]] = []
 
@@ -203,6 +257,28 @@ def test_call_tool_audits_project_rejection_category(monkeypatch: pytest.MonkeyP
 
     assert audit_events[-1]["success"] is False
     assert audit_events[-1]["extra"] == {"rejection_reason": "project_not_allowed"}
+
+
+def test_call_tool_audits_dataset_rejection_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_events: list[dict[str, object]] = []
+
+    def fake_handler(session: UserSession, args: dict[str, object], settings: Settings) -> dict[str, object]:
+        raise DatasetNotAllowedError("Dataset is not allowed by ALLOWED_DATASET_IDS: ice-sh:denied_dataset")
+
+    monkeypatch.setitem(bigquery_tools.TOOL_HANDLERS, "fake_tool", fake_handler)
+    monkeypatch.setattr(bigquery_tools, "audit_log", lambda **kwargs: audit_events.append(kwargs))
+
+    with pytest.raises(DatasetNotAllowedError):
+        call_tool(
+            "fake_tool",
+            make_session(),
+            {"project_id": "ice-sh", "dataset_id": "denied_dataset"},
+            make_settings(allowed_dataset_ids="ice-sh:allowed_dataset"),
+        )
+
+    assert audit_events[-1]["success"] is False
+    assert audit_events[-1]["dataset"] == "denied_dataset"
+    assert audit_events[-1]["extra"] == {"rejection_reason": "dataset_not_allowed"}
 
 
 def test_call_tool_audits_user_rejection_category(monkeypatch: pytest.MonkeyPatch) -> None:
