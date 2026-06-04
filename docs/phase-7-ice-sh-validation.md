@@ -8,7 +8,7 @@ User identity: `sinohara@impress.co.jp`
 
 Phase 7 is complete for OAuth, MCP connectivity, BigQuery readonly tools, SQL guard behavior, unauthorized project rejection, and Cloud Logging audit output.
 
-The final Access Denied validation was completed on 2026-06-04 using project `bq-mcp-access-denied-test-2`. A project-level IAM Deny policy denied `sinohara@impress.co.jp` BigQuery job creation, and MCP `dry_run_query` returned HTTP `403 Forbidden`.
+The final Access Denied validation was completed on 2026-06-04 using project `bq-mcp-access-denied-test-2`. A project-level IAM Deny policy denied `sinohara@impress.co.jp` BigQuery job creation, and MCP `dry_run_query` returned HTTP `403 Forbidden`. Cloud Logging also recorded the denied tool call with `success=false`.
 
 ## Completed Checks
 
@@ -24,8 +24,8 @@ The final Access Denied validation was completed on 2026-06-04 using project `bq
 | `run_readonly_query` | Complete | Returned 5 rows from the validation table. |
 | DML rejection | Complete | `DELETE` was rejected with `Only SELECT or WITH queries are allowed`. |
 | DDL rejection | Complete | `CREATE TABLE` was rejected with `Only SELECT or WITH queries are allowed`. |
-| Audit log | Complete | Cloud Logging contains `bigquery_mcp_tool_call` entries for success and rejection cases. |
-| Unauthorized project rejection | Complete | `dry_run_query` against `bq-mcp-access-denied-test-2` returned HTTP `403 Forbidden`. |
+| Audit log | Complete | Cloud Logging contains `bigquery_mcp_tool_call` entries for success, SQL guard rejection, and unauthorized project rejection cases. |
+| Unauthorized project rejection | Complete | `dry_run_query` against `bq-mcp-access-denied-test-2` returned HTTP `403 Forbidden`; Cloud Logging recorded `success=false`. |
 
 ## Validation Dataset And Table
 
@@ -180,6 +180,17 @@ Observed audit fields:
 - `project_id`: `ice-sh` and validation project IDs
 - `success`: `true` for successful reads, `false` for rejected SQL and unauthorized project access
 - `error`: rejection reason such as `Only SELECT or WITH queries are allowed` or HTTP `403 Forbidden`
+
+Unauthorized project audit evidence:
+
+```text
+timestamp: 2026-06-04T06:22:24.420190Z
+user_email: sinohara@impress.co.jp
+tool: dry_run_query
+project_id: bq-mcp-access-denied-test-2
+success: false
+error: Client error '403 Forbidden' for url 'https://bigquery.googleapis.com/bigquery/v2/projects/bq-mcp-access-denied-test-2/queries'
+```
 
 This confirms that both successful tool calls and rejected tool calls are auditable in Cloud Logging.
 
