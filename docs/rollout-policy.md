@@ -33,6 +33,7 @@ The following Phase 8 controls are implemented:
 - Other internal execution failures are written to audit logs with `success=false` and `rejection_reason="execution_error"`.
 - `list_projects` is filtered to allowed projects when `ALLOWED_PROJECT_IDS` is set.
 - Unit tests cover empty allowlists, allowed project, rejected project, default-project rejection, allowed user, rejected user, case-insensitive email matching, SQL guard rejection category, BigQuery IAM-denied category, BigQuery API-error category, and generic execution-error category.
+- BigQuery audit dataset export has been evaluated. Cloud Logging remains the required audit sink; BigQuery export is recommended only when retention, reporting, or dashboard requirements need it.
 - The initial Cloud Run deployment sets `ALLOWED_PROJECT_IDS=ice-sh` and leaves `ALLOWED_USER_EMAILS` empty.
 
 ## Principles
@@ -55,7 +56,7 @@ The following Phase 8 controls are implemented:
 | User allowlist | Implemented with optional `ALLOWED_USER_EMAILS`. Keep it empty for normal domain+IAM operation; set it for sensitive deployments or limited pilots. | Keeps onboarding simple by default while supporting named-user restriction when needed. |
 | Domain allowlist | Required. Initial value: `impress.co.jp`. | Blocks non-company Google accounts before BigQuery access is attempted. |
 | Per-project policy | Required. Cloud Run, Artifact Registry, Secret Manager, WIF, deploy service account, GitHub Secrets, OAuth redirect URI, and health check must be managed per GCP project. | Keeps blast radius and deployment ownership clear. |
-| BigQuery audit dataset | Follow-up hardening, not required for initial operation. Cloud Logging is required now. | Cloud Logging satisfies Phase 7 audit verification; BigQuery persistence can be added once retention/reporting requirements are clear. |
+| BigQuery audit dataset | Evaluated. Keep Cloud Logging as the required audit source now. Add BigQuery export through a Log Router sink when retention, reporting, dashboard, or cross-project review requirements are confirmed. | Avoids adding storage and IAM surface before there is an operational need, while leaving a clear path for durable audit analytics. |
 | Query history UI | Follow-up improvement, not required for initial operation. | Audit logs are enough for the initial controlled rollout. |
 | IAM Deny policy | Not required for normal operation. Use only for validation, break-glass restrictions, or explicit security boundaries. | Standard access should be governed by Google OAuth identity plus BigQuery IAM. Deny policies are powerful and should stay exceptional. |
 
@@ -339,6 +340,112 @@ jsonPayload.event_type="bigquery_mcp_tool_call"
 jsonPayload.rejection_reason="bigquery_iam_denied"
 ```
 
+## BigQuery Audit Dataset Export Evaluation
+
+Status: evaluated in Phase 8 P2. Do not implement as a required control for the initial rollout. Keep Cloud Logging as the required audit source, and add BigQuery export only when durable retention, reporting, or dashboard requirements justify the extra operational surface.
+
+### Recommendation
+
+Use a Cloud Logging Log Router sink to export MCP audit logs to BigQuery. Do not write audit rows directly from the MCP application as the default approach.
+
+This preserves the current single audit path:
+
+1. MCP writes one structured JSON audit event to stdout.
+2. Cloud Run sends stdout to Cloud Logging.
+3. Cloud Logging remains the source of truth for immediate investigation.
+4. Optional Log Router sink exports matching audit events to a BigQuery dataset for retention and analytics.
+
+### When To Enable
+
+Enable BigQuery export when at least one of these is true:
+
+- Audit retention must exceed the Cloud Logging retention policy.
+- Security or operations needs recurring reports by user, project, tool, or rejection reason.
+- Multiple Cloud Run deployments need a shared audit review surface.
+- Query history UI or dashboard work begins.
+- Incident review requires joining MCP audit logs with other BigQuery or access-control data.
+
+Do not enable it only because the MCP can produce logs. Cloud Logging already satisfies the Phase 7 and initial Phase 8 audit requirement.
+
+### Preferred Architecture
+
+Recommended destination:
+
+- Dataset name: `bigquery_mcp_audit`
+- Table source: Cloud Logging BigQuery sink tables generated from the `bigquery_mcp_tool_call` filter
+- Dataset location: same region policy as the deployment project, preferably `asia-northeast1` when supported by the surrounding analytics policy
+- Retention: define explicitly before enabling, for example 180 days, 400 days, or the organization security standard
+
+Recommended Log Router filter:
+
+```text
+resource.type="cloud_run_revision"
+resource.labels.service_name="bigquery-readonly-mcp"
+jsonPayload.event_type="bigquery_mcp_tool_call"
+```
+
+For a shared audit dataset across multiple deployments, keep these fields queryable:
+
+- Cloud project that emitted the log
+- Cloud Run service name
+- `user_email`
+- `tool`
+- `project_id`
+- `dataset`
+- `table`
+- `bytes_processed`
+- `success`
+- `error`
+- `rejection_reason`
+- log timestamp
+
+### Why Not Direct Application Writes
+
+Directly inserting audit rows from the MCP application into BigQuery is not the preferred default because it would:
+
+- Add a second BigQuery write path to a read-only MCP service.
+- Require extra runtime service account permissions.
+- Make audit success depend on an additional application-side API call.
+- Increase the chance that an audit write failure affects user-facing MCP behavior.
+
+If direct writes are ever required, they should be implemented as a separate, explicitly reviewed hardening task with failure isolation, no user token use, and clear runtime service account permissions.
+
+### IAM And Safety Requirements
+
+When enabling Log Router export:
+
+- Grant the Log Router sink writer identity only the BigQuery permissions needed to write to the audit dataset.
+- Do not grant MCP runtime code permission to write audit rows unless direct writes are separately approved.
+- Restrict dataset read access to security, operations, and approved administrators.
+- Avoid storing raw query result data. The current audit payload contains metadata, not result rows.
+- Treat `error` as potentially sensitive operational text and restrict read access accordingly.
+
+### Validation Plan
+
+Before declaring BigQuery export ready:
+
+1. Create or identify the audit dataset.
+2. Create a Log Router sink with the recommended filter.
+3. Run one successful MCP tool call.
+4. Run one rejected project or SQL guard call.
+5. Confirm exported rows contain `success=true` and `success=false` records.
+6. Confirm `rejection_reason` is populated for rejected calls.
+7. Confirm dashboard/report queries can filter by `user_email`, `project_id`, `tool`, and `rejection_reason`.
+8. Confirm dataset IAM is limited to approved reviewers.
+9. Confirm retention and deletion policy are documented.
+
+### Estimated Effort
+
+| Task | Estimated time |
+| --- | --- |
+| Confirm retention and reader policy | 15-30 minutes |
+| Create dataset and Log Router sink | 15-30 minutes |
+| IAM review and access grant | 15-30 minutes |
+| Run validation calls and query exported rows | 20-40 minutes |
+| Document final rollout record | 10-20 minutes |
+
+Total estimate: about 1.0-2.5 hours, depending on IAM approval speed and whether the audit dataset already exists.
+
 ## Phase 8 Implementation Backlog
 
 | Priority | Status | Item | Purpose |
@@ -348,7 +455,7 @@ jsonPayload.rejection_reason="bigquery_iam_denied"
 | P1 | Complete | Implement optional `ALLOWED_USER_EMAILS`. | Support limited pilots and sensitive deployments. |
 | P1 | Complete | Add audit fields for rejection reason category. | Project, user, SQL guard, BigQuery IAM denied, BigQuery API error, and execution-error failures are categorized. |
 | P1 | Complete | Document per-project rollout template. | Make future rollouts repeatable. |
-| P2 | Open | Evaluate BigQuery audit dataset export. | Support retention, reporting, and dashboards beyond Cloud Logging. |
+| P2 | Complete | Evaluate BigQuery audit dataset export. | Cloud Logging remains required; Log Router to BigQuery is the recommended optional path when retention/reporting requirements exist. |
 | P2 | Open | Consider query history UI. | Give administrators a review surface without raw log browsing. |
 | P2 | Open | Consider project-scoped dataset allowlist. | Add an application boundary when IAM is too broad for operational policy. |
 
@@ -357,7 +464,7 @@ jsonPayload.rejection_reason="bigquery_iam_denied"
 These are not required to complete the initial `ice-sh` rollout, but should be considered before broad multi-project use:
 
 - Optional dataset allowlist for deployments where IAM alone is not enough for operational policy.
-- BigQuery audit dataset export.
+- Implement BigQuery audit dataset export after retention and reporting requirements are confirmed.
 - Query history UI for administrators.
 - Dedicated runtime service account instead of the default compute service account.
 - Persistent OAuth/session storage if Cloud Run restarts or session longevity become operational issues.
