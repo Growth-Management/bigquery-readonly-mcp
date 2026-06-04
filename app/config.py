@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     allowed_domain: str = Field(default="impress.co.jp", alias="ALLOWED_DOMAIN")
     default_project_id: str = Field(default="ice-sh", alias="DEFAULT_PROJECT_ID")
     allowed_project_ids: str = Field(default="", alias="ALLOWED_PROJECT_IDS")
+    allowed_dataset_ids: str = Field(default="", alias="ALLOWED_DATASET_IDS")
     allowed_user_emails: str = Field(default="", alias="ALLOWED_USER_EMAILS")
     maximum_bytes_billed: int = Field(default=1_073_741_824, alias="MAXIMUM_BYTES_BILLED")
     max_results: int = Field(default=1000, alias="MAX_RESULTS")
@@ -31,6 +32,10 @@ class Settings(BaseSettings):
     @property
     def allowed_project_id_set(self) -> set[str]:
         return _csv_set(self.allowed_project_ids)
+
+    @property
+    def allowed_dataset_id_set(self) -> set[str]:
+        return _csv_set(self.allowed_dataset_ids)
 
     @property
     def allowed_user_email_set(self) -> set[str]:
