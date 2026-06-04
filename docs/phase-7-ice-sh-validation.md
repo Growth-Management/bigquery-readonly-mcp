@@ -1,14 +1,14 @@
 # Phase 7: ice-sh Validation Record
 
-Date: 2026-06-01
+Date: 2026-06-01 through 2026-06-04
 Environment: Cloud Run `bigquery-readonly-mcp` in project `ice-sh`, region `asia-northeast1`
 User identity: `sinohara@impress.co.jp`
 
 ## Summary
 
-Phase 7 is functionally complete for OAuth, MCP connectivity, BigQuery readonly tools, SQL guard behavior, and Cloud Logging audit output.
+Phase 7 is complete for OAuth, MCP connectivity, BigQuery readonly tools, SQL guard behavior, unauthorized project rejection, and Cloud Logging audit output.
 
-One item remains open: validating that an existing project outside the logged-in user's IAM scope returns `403` / `Access Denied`. A non-accessible project probe returned a JSON-RPC error, but the underlying BigQuery response was `404 Project not found`, so it is not strong enough evidence for the Access Denied case.
+The final Access Denied validation was completed on 2026-06-04 using project `bq-mcp-access-denied-test-2`. A project-level IAM Deny policy denied `sinohara@impress.co.jp` BigQuery job creation, and MCP `dry_run_query` returned HTTP `403 Forbidden`.
 
 ## Completed Checks
 
@@ -25,7 +25,7 @@ One item remains open: validating that an existing project outside the logged-in
 | DML rejection | Complete | `DELETE` was rejected with `Only SELECT or WITH queries are allowed`. |
 | DDL rejection | Complete | `CREATE TABLE` was rejected with `Only SELECT or WITH queries are allowed`. |
 | Audit log | Complete | Cloud Logging contains `bigquery_mcp_tool_call` entries for success and rejection cases. |
-| Unauthorized project Access Denied | Open | Needs an existing project ID that is not visible to the logged-in user. |
+| Unauthorized project rejection | Complete | `dry_run_query` against `bq-mcp-access-denied-test-2` returned HTTP `403 Forbidden`. |
 
 ## Validation Dataset And Table
 
@@ -112,6 +112,53 @@ message: Only SELECT or WITH queries are allowed
 
 These checks confirm that write-oriented SQL is rejected by the MCP SQL guard before BigQuery execution.
 
+## Unauthorized Project Evidence
+
+Validation project:
+
+```text
+bq-mcp-access-denied-test-2
+```
+
+Deny policy:
+
+```text
+policy_id: deny-bq-sinohara-for-mcp-validation
+display_name: Deny BigQuery access for MCP validation
+denied_principal: principal://goog/subject/sinohara@impress.co.jp
+```
+
+Denied permissions:
+
+```text
+bigquery.googleapis.com/datasets.get
+bigquery.googleapis.com/tables.list
+bigquery.googleapis.com/tables.get
+bigquery.googleapis.com/tables.getData
+bigquery.googleapis.com/jobs.create
+```
+
+Probe query:
+
+```sql
+SELECT 1 AS access_denied_probe
+```
+
+MCP tool call:
+
+```text
+dry_run_query(project_id="bq-mcp-access-denied-test-2", sql="SELECT 1 AS access_denied_probe")
+```
+
+Result:
+
+```text
+JSON-RPC error code: -32000
+message: Client error '403 Forbidden' for url 'https://bigquery.googleapis.com/bigquery/v2/projects/bq-mcp-access-denied-test-2/queries'
+```
+
+This confirms that BigQuery execution follows the logged-in user's effective IAM and that unauthorized project access is not treated as a successful MCP response.
+
 ## Audit Log Evidence
 
 Cloud Logging filter used:
@@ -130,55 +177,14 @@ Observed audit fields:
 
 - `user_email`: `sinohara@impress.co.jp`
 - `tool`: `list_projects`, `list_datasets`, `list_tables`, `get_table_schema`, `dry_run_query`, `run_readonly_query`
-- `project_id`: `ice-sh` and probe project IDs
-- `success`: `true` for successful reads, `false` for rejected SQL
-- `error`: rejection reason such as `Only SELECT or WITH queries are allowed`
+- `project_id`: `ice-sh` and validation project IDs
+- `success`: `true` for successful reads, `false` for rejected SQL and unauthorized project access
+- `error`: rejection reason such as `Only SELECT or WITH queries are allowed` or HTTP `403 Forbidden`
 
-This confirms that both successful tool calls and SQL guard rejections are auditable in Cloud Logging.
-
-## Open Item: Unauthorized Project Access Denied
-
-Current status: open.
-
-A probe against `google.com:cloud-bigtable-public-data` returned a JSON-RPC error, but the BigQuery API response was:
-
-```text
-404 Not found: Project google.com:cloud-bigtable-public-data
-```
-
-This proves the MCP does not turn an inaccessible project probe into a successful tool response, but it does not prove the stricter `403` / `Access Denied` behavior.
-
-To close this item, identify an existing project ID that is not returned by `list_projects` for the logged-in user, then run:
-
-```bash
-UNAUTHORIZED_PROJECT="replace-with-existing-project-without-access"
-
-curl -sS -X POST "$CLOUD_RUN_URL/mcp" \
-  -H "Content-Type: application/json" \
-  -H "Cookie: mcp_session=$MCP_SESSION" \
-  -d "{
-    \"jsonrpc\":\"2.0\",
-    \"id\":111,
-    \"method\":\"tools/call\",
-    \"params\":{
-      \"name\":\"list_datasets\",
-      \"arguments\":{
-        \"project_id\":\"$UNAUTHORIZED_PROJECT\"
-      }
-    }
-  }" | jq .
-```
-
-Expected result:
-
-```text
-JSON-RPC error with 403, Access Denied, or Permission denied in the message
-```
-
-Then confirm the failed call is also recorded in Cloud Logging with `success=false`.
+This confirms that both successful tool calls and rejected tool calls are auditable in Cloud Logging.
 
 ## Recommended Next Steps
 
-1. Keep the unauthorized-project Access Denied check open until a real no-access project ID is available.
-2. Move to Phase 8 planning in parallel, because the remaining open item does not block the validated readonly path for `ice-sh`.
-3. When the Access Denied project ID is available, run the one-command check above and update this document.
+1. Preserve this document as the Phase 7 validation record.
+2. Keep the `bq-mcp-access-denied-test-2` Deny policy only as long as needed for audit evidence or repeat validation.
+3. Move to Phase 8 planning for rollout policy, allowlists, audit retention, and query history.
