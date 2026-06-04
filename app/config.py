@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     oauth_client_secret: str = Field(alias="GOOGLE_OAUTH_CLIENT_SECRET")
     allowed_domain: str = Field(default="impress.co.jp", alias="ALLOWED_DOMAIN")
     default_project_id: str = Field(default="ice-sh", alias="DEFAULT_PROJECT_ID")
+    allowed_project_ids: str = Field(default="", alias="ALLOWED_PROJECT_IDS")
     maximum_bytes_billed: int = Field(default=1_073_741_824, alias="MAXIMUM_BYTES_BILLED")
     max_results: int = Field(default=1000, alias="MAX_RESULTS")
     query_timeout_seconds: int = Field(default=60, alias="QUERY_TIMEOUT_SECONDS")
@@ -21,6 +22,10 @@ class Settings(BaseSettings):
     @property
     def redirect_uri(self) -> str:
         return f"{self.base_url.rstrip('/')}/oauth/callback"
+
+    @property
+    def allowed_project_id_set(self) -> set[str]:
+        return {project_id.strip() for project_id in self.allowed_project_ids.split(",") if project_id.strip()}
 
 
 @lru_cache
