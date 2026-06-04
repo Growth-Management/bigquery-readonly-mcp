@@ -1,14 +1,17 @@
 # BigQuery Readonly MCP
 
-BigQuery Readonly MCP is a FastAPI-based Custom MCP server for safely querying BigQuery from ChatGPT. It is designed as a reusable internal analytics MCP: each tool accepts `project_id`, while the initial validation project is `ice-sh`.
+BigQuery Readonly MCP is a FastAPI-based Custom MCP server for safely querying BigQuery from ChatGPT. It is designed as a reusable internal analytics MCP: each tool accepts `project_id`. The initial validation project was `ice-sh`; the current pilot operating project is `ice-mp`.
 
 ## Scope
 
 - GitHub repository: `Growth-Management/bigquery-readonly-mcp`
 - Cloud Run deploy project: `ice-sh`
 - Initial BigQuery validation project: `ice-sh`
+- Current pilot BigQuery project: `ice-mp`
+- Initial pilot user: `sinohara@impress.co.jp`
 - Allowed email domain: `impress.co.jp`
-- Allowed project IDs: `ice-sh` for the initial deployment
+- Allowed project IDs: `ice-mp` for the current pilot deployment
+- Allowed dataset IDs: empty by default, so BigQuery IAM controls dataset access
 - Default `maximumBytesBilled`: 1GB
 - Default `max_results`: 1000
 - Default query timeout: 60 seconds
@@ -41,7 +44,7 @@ Allowlist rejections are recorded in audit logs with `success=false` and a `reje
 - `dry_run_query`
 - `run_readonly_query`
 
-All tools accept `project_id` where applicable. If omitted, the default is `ice-sh`.
+All tools accept `project_id` where applicable. If omitted, the current pilot default is `ice-mp`.
 
 ## Endpoints
 
@@ -73,10 +76,10 @@ export GOOGLE_OAUTH_CLIENT_ID="..."
 export GOOGLE_OAUTH_CLIENT_SECRET="..."
 export SESSION_SECRET="replace-with-random-value"
 export ALLOWED_DOMAIN="impress.co.jp"
-export DEFAULT_PROJECT_ID="ice-sh"
-export ALLOWED_PROJECT_IDS="ice-sh"
+export DEFAULT_PROJECT_ID="ice-mp"
+export ALLOWED_PROJECT_IDS="ice-mp"
 export ALLOWED_DATASET_IDS=""
-export ALLOWED_USER_EMAILS=""
+export ALLOWED_USER_EMAILS="sinohara@impress.co.jp"
 export MAXIMUM_BYTES_BILLED="1073741824"
 export MAX_RESULTS="1000"
 export QUERY_TIMEOUT_SECONDS="60"
@@ -85,7 +88,7 @@ export QUERY_TIMEOUT_SECONDS="60"
 `ALLOWED_DATASET_IDS` is a comma-separated list of `project_id:dataset_id` values, for example:
 
 ```bash
-export ALLOWED_DATASET_IDS="ice-sh:ice_sh_datamart,ice-sh:ice_sh_source"
+export ALLOWED_DATASET_IDS="ice-mp:example_datamart,ice-mp:example_source"
 ```
 
 Run the app:
@@ -139,7 +142,17 @@ The GitHub Actions workflow expects these GitHub Secrets:
 
 The deploy service account needs only deployment permissions, such as Artifact Registry write and Cloud Run deploy permissions. It is not used for BigQuery query execution.
 
-Deployment is managed per GCP project. The initial deployment target is `ice-sh`; when this MCP is rolled out to another project, create that project's own Cloud Run service, Artifact Registry repository, Secret Manager secrets, Workload Identity Federation bindings, and GitHub Secrets.
+Current pilot deployment settings:
+
+- `DEFAULT_PROJECT_ID=ice-mp`
+- `ALLOWED_PROJECT_IDS=ice-mp`
+- `ALLOWED_DATASET_IDS=`
+- `ALLOWED_USER_EMAILS=sinohara@impress.co.jp`
+- `MAXIMUM_BYTES_BILLED=1073741824`
+- `MAX_RESULTS=1000`
+- `QUERY_TIMEOUT_SECONDS=60`
+
+Deployment is managed per GCP project. The Cloud Run deployment project is `ice-sh`; the current pilot BigQuery target project is `ice-mp`.
 
 See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment procedure, including required APIs, Artifact Registry, Secret Manager, manual deploy, `/health`, and Cloud Logging checks.
 
@@ -165,6 +178,12 @@ Use a user account in the allowed domain with the required BigQuery IAM permissi
 - audit logs are emitted to Cloud Logging
 
 Current status as of 2026-06-04: Phase 7 validation is complete. `ice-sh` readonly checks, SQL guard checks, Cloud Logging audit checks, and unauthorized-project rejection have been verified. The unauthorized-project check used `bq-mcp-access-denied-test-2` with a project-level IAM Deny policy for `sinohara@impress.co.jp`; MCP `dry_run_query` returned HTTP `403 Forbidden`.
+
+## Current Pilot On ice-mp
+
+Current status as of 2026-06-04: `ice-mp` pilot operation is enabled for `sinohara@impress.co.jp` only. `ALLOWED_PROJECT_IDS=ice-mp` prevents accidental use of other projects from this deployment. `ALLOWED_DATASET_IDS` is empty, so dataset access is governed by the logged-in user's BigQuery IAM.
+
+Before expanding beyond the initial pilot user, repeat the rollout checklist in `docs/rollout-policy.md` and decide whether `ALLOWED_DATASET_IDS` or additional named-user restrictions are needed.
 
 ## Audit Logging
 
@@ -204,7 +223,7 @@ Example Cloud Logging filter:
 
 ```text
 jsonPayload.event_type="bigquery_mcp_tool_call"
-jsonPayload.project_id="ice-sh"
+jsonPayload.project_id="ice-mp"
 ```
 
 To inspect rejected calls by category:
@@ -212,7 +231,7 @@ To inspect rejected calls by category:
 ```text
 jsonPayload.event_type="bigquery_mcp_tool_call"
 jsonPayload.success=false
-jsonPayload.rejection_reason="dataset_not_allowed"
+jsonPayload.rejection_reason="project_not_allowed"
 ```
 
 ## Current Phase Coverage
@@ -222,6 +241,6 @@ jsonPayload.rejection_reason="dataset_not_allowed"
 - Phase 3: readonly SQL guard, `maximumBytesBilled`, `max_results`, timeout, basic query error handling
 - Phase 4: structured JSON audit logs are emitted to stdout for Cloud Logging ingestion
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
-- Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
+- Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; `ice-mp` pilot defaults are configured; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
