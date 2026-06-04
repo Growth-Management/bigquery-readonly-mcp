@@ -81,12 +81,6 @@ Default behavior:
 
 Use this only when the same operations team owns all target projects and accepts a shared blast radius.
 
-Recommended for:
-
-- Small internal pilots.
-- Closely related projects with the same administrators and IAM model.
-- Temporary validation before splitting into dedicated deployments.
-
 Required controls:
 
 - Set `ALLOWED_PROJECT_IDS` for every approved project.
@@ -116,6 +110,105 @@ For every new project, create or confirm the following:
 12. BigQuery IAM grants are reviewed at project, dataset, table/view, folder, organization, Google Group, and domain levels.
 13. Phase 7 validation is repeated for the target project before opening use to more users.
 14. Rollback steps are documented: disable connector, remove Cloud Run invoker access, remove project/user allowlist entry, or delete the deployment.
+
+## Rollout Record Template
+
+Copy this section for each new project rollout.
+
+### Summary
+
+| Field | Value |
+| --- | --- |
+| Rollout name |  |
+| Target BigQuery project ID |  |
+| Cloud Run deployment project ID |  |
+| Cloud Run service name | `bigquery-readonly-mcp` |
+| Region | `asia-northeast1` |
+| Owner / requestor |  |
+| Operations owner |  |
+| Security reviewer |  |
+| Rollout pattern | Pattern A dedicated / Pattern B shared |
+| Intended users |  |
+| Intended datasets |  |
+| Status | Draft / Validating / Validated / Paused / Retired |
+
+### Environment
+
+| Variable | Expected | Actual | Status |
+| --- | --- | --- | --- |
+| `BASE_URL` | Cloud Run URL or custom domain |  |  |
+| `ALLOWED_DOMAIN` | `impress.co.jp` |  |  |
+| `DEFAULT_PROJECT_ID` | Target project ID |  |  |
+| `ALLOWED_PROJECT_IDS` | Target project plus approved adjacent projects |  |  |
+| `ALLOWED_USER_EMAILS` | Empty unless named-user pilot |  |  |
+| `MAXIMUM_BYTES_BILLED` | `1073741824` unless approved otherwise |  |  |
+| `MAX_RESULTS` | `1000` unless approved otherwise |  |  |
+| `QUERY_TIMEOUT_SECONDS` | `60` unless approved otherwise |  |  |
+
+### BigQuery IAM Review
+
+| Access path | Reviewed? | Notes |
+| --- | --- | --- |
+| Direct project IAM for target users |  |  |
+| Google Group project IAM |  |  |
+| Folder / organization inheritance |  |  |
+| Dataset `userByEmail` entries |  |  |
+| Dataset `groupByEmail` entries |  |  |
+| Dataset `domain` entries |  |  |
+| Dataset `specialGroup` / `projectReaders` entries |  |  |
+| Authorized views / linked datasets |  |  |
+| Broad project `dataViewer`, `viewer`, `editor`, or `owner` |  |  |
+
+### Validation Target
+
+| Field | Value |
+| --- | --- |
+| Validation dataset |  |
+| Validation table |  |
+| Validation SQL |  |
+| Rejected project test |  |
+| Rejected user test, if configured |  |
+
+### Validation Checklist
+
+| Check | Expected result | Actual result | Status |
+| --- | --- | --- | --- |
+| `/health` | HTTP 200 and `{"status":"ok"}` |  |  |
+| OAuth login | Allowed-domain login succeeds |  |  |
+| `/mcp` authenticated call | JSON-RPC tool call succeeds |  |  |
+| `list_projects` | Expected allowed project visibility |  |  |
+| `list_datasets` | Target datasets returned |  |  |
+| `list_tables` | Validation table visible |  |  |
+| `get_table_schema` | Schema returned |  |  |
+| `dry_run_query` | Bytes processed returned, under limit |  |  |
+| `run_readonly_query` | Bounded rows returned |  |  |
+| DML rejection | Rejected before BigQuery execution |  |  |
+| DDL rejection | Rejected before BigQuery execution |  |  |
+| Project outside `ALLOWED_PROJECT_IDS` | Rejected before BigQuery execution |  |  |
+| User outside `ALLOWED_USER_EMAILS`, if configured | Rejected before BigQuery execution |  |  |
+| Unauthorized project / denied job creation | Error, not successful MCP response |  |  |
+| Audit log success case | `success=true` record present |  |  |
+| Audit log rejection case | `success=false` record present |  |  |
+
+### Rollback Plan
+
+| Rollback action | Owner | Procedure | Status |
+| --- | --- | --- | --- |
+| Disable MCP connector |  |  |  |
+| Remove project from `ALLOWED_PROJECT_IDS` |  |  |  |
+| Remove user from `ALLOWED_USER_EMAILS` |  |  |  |
+| Remove Cloud Run invoker access if restricted |  |  |  |
+| Revert GitHub deployment |  |  |  |
+| Delete Cloud Run service if needed |  |  |  |
+
+### Sign-Off
+
+| Role | Name | Date | Notes |
+| --- | --- | --- | --- |
+| Requestor |  |  |  |
+| Operations owner |  |  |  |
+| Security reviewer |  |  |  |
+| BigQuery data owner |  |  |  |
 
 ## BigQuery IAM Policy
 
@@ -163,12 +256,6 @@ Current behavior:
 - Email matching for `ALLOWED_USER_EMAILS` is case-insensitive.
 - Dataset allowlist remains planned and should be optional and scoped by project.
 
-Security reason:
-
-- Project allowlists reduce accidental cross-project query attempts.
-- User allowlists help pilot sensitive deployments.
-- Dataset allowlists are useful when operational policy is stricter than IAM, but they increase maintenance burden.
-
 ## Required Validation For Each Rollout
 
 Repeat the Phase 7 validation with the target project:
@@ -204,8 +291,6 @@ Every rollout must confirm Cloud Logging receives structured audit records with:
 - `success`
 - `error`
 
-Initial retention stays in Cloud Logging. A BigQuery audit dataset can be added later if longer retention, reporting, or dashboarding is required.
-
 Recommended Cloud Logging filters:
 
 ```text
@@ -230,15 +315,13 @@ jsonPayload.rejection_reason="user_not_allowed"
 
 ## Phase 8 Implementation Backlog
 
-The following backlog turns this policy into product controls:
-
 | Priority | Status | Item | Purpose |
 | --- | --- | --- | --- |
 | P0 | Complete | Implement `ALLOWED_PROJECT_IDS` enforcement. | Prevent cross-project use from a shared deployment. |
 | P0 | Complete | Add tests for allowed and rejected project IDs. | Prove allowlist behavior before broad rollout. |
 | P1 | Complete | Implement optional `ALLOWED_USER_EMAILS`. | Support limited pilots and sensitive deployments. |
 | P1 | Partial | Add audit fields for rejection reason category. | Project and user allowlist rejections are categorized; SQL guard and BigQuery API errors still need structured categories. |
-| P1 | Open | Document per-project rollout template. | Make future rollouts repeatable. |
+| P1 | Complete | Document per-project rollout template. | Make future rollouts repeatable. |
 | P2 | Open | Evaluate BigQuery audit dataset export. | Support retention, reporting, and dashboards beyond Cloud Logging. |
 | P2 | Open | Consider query history UI. | Give administrators a review surface without raw log browsing. |
 | P2 | Open | Consider project-scoped dataset allowlist. | Add an application boundary when IAM is too broad for operational policy. |
