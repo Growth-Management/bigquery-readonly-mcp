@@ -8,6 +8,7 @@ BigQuery Readonly MCP is a FastAPI-based Custom MCP server for safely querying B
 - Cloud Run deploy project: `ice-sh`
 - Initial BigQuery validation project: `ice-sh`
 - Allowed email domain: `impress.co.jp`
+- Allowed project IDs: `ice-sh` for the initial deployment
 - Default `maximumBytesBilled`: 1GB
 - Default `max_results`: 1000
 - Default query timeout: 60 seconds
@@ -22,6 +23,8 @@ Users should receive the minimum required IAM permissions:
 - `roles/bigquery.dataViewer` on only the datasets they may inspect
 
 The server enforces readonly SQL before execution. `run_readonly_query` and `dry_run_query` only allow one `SELECT` or `WITH` statement and reject DML, DDL, `EXPORT`, `LOAD`, grants, revokes, and procedure calls.
+
+The server can also enforce an application-side project allowlist with `ALLOWED_PROJECT_IDS`. When set, tool calls for projects outside the list are rejected before any BigQuery API call is made and are recorded in audit logs with `success=false`.
 
 ## MCP Tools
 
@@ -65,6 +68,7 @@ export GOOGLE_OAUTH_CLIENT_SECRET="..."
 export SESSION_SECRET="replace-with-random-value"
 export ALLOWED_DOMAIN="impress.co.jp"
 export DEFAULT_PROJECT_ID="ice-sh"
+export ALLOWED_PROJECT_IDS="ice-sh"
 export MAXIMUM_BYTES_BILLED="1073741824"
 export MAX_RESULTS="1000"
 export QUERY_TIMEOUT_SECONDS="60"
@@ -185,4 +189,4 @@ jsonPayload.project_id="ice-sh"
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: rollout patterns, allowlist policy, per-project validation, audit requirements, and implementation backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS` enforcement and allow/reject tests are implemented; rollout patterns, allowlist policy, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
