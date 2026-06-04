@@ -27,6 +27,7 @@ The server enforces readonly SQL before execution. `run_readonly_query` and `dry
 The server can also enforce application-side allowlists:
 
 - `ALLOWED_PROJECT_IDS`: when set, tool calls for projects outside the list are rejected before any BigQuery API call is made.
+- `ALLOWED_DATASET_IDS`: when set, `list_datasets` is filtered and `list_tables` / `get_table_schema` calls outside the list are rejected before any BigQuery API call is made.
 - `ALLOWED_USER_EMAILS`: when set, tool calls from users outside the list are rejected before any BigQuery API call is made.
 
 Allowlist rejections are recorded in audit logs with `success=false` and a `rejection_reason`.
@@ -74,10 +75,17 @@ export SESSION_SECRET="replace-with-random-value"
 export ALLOWED_DOMAIN="impress.co.jp"
 export DEFAULT_PROJECT_ID="ice-sh"
 export ALLOWED_PROJECT_IDS="ice-sh"
+export ALLOWED_DATASET_IDS=""
 export ALLOWED_USER_EMAILS=""
 export MAXIMUM_BYTES_BILLED="1073741824"
 export MAX_RESULTS="1000"
 export QUERY_TIMEOUT_SECONDS="60"
+```
+
+`ALLOWED_DATASET_IDS` is a comma-separated list of `project_id:dataset_id` values, for example:
+
+```bash
+export ALLOWED_DATASET_IDS="ice-sh:ice_sh_datamart,ice-sh:ice_sh_source"
 ```
 
 Run the app:
@@ -139,7 +147,7 @@ See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the pre
 
 See [`docs/phase-7-ice-sh-validation.md`](docs/phase-7-ice-sh-validation.md) for the Phase 7 validation record.
 
-See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, and follow-up hardening. The same document includes the per-project rollout record template, BigQuery audit dataset export evaluation, query history UI evaluation, and project-scoped dataset allowlist evaluation.
+See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, and follow-up hardening. The same document includes the per-project rollout record template, BigQuery audit dataset export evaluation, query history UI evaluation, and project-scoped dataset allowlist guidance.
 
 ## Initial Validation On ice-sh
 
@@ -183,6 +191,7 @@ Each audit event includes:
 `rejection_reason` uses these categories:
 
 - `project_not_allowed`: `project_id` is outside `ALLOWED_PROJECT_IDS`.
+- `dataset_not_allowed`: `project_id:dataset_id` is outside `ALLOWED_DATASET_IDS` for dataset-targeting metadata tools.
 - `user_not_allowed`: user email is outside `ALLOWED_USER_EMAILS`.
 - `sql_not_allowed`: SQL guard rejected a non-readonly or unsafe query.
 - `bigquery_iam_denied`: BigQuery returned a permission-denied response, including HTTP 403.
@@ -203,7 +212,7 @@ To inspect rejected calls by category:
 ```text
 jsonPayload.event_type="bigquery_mcp_tool_call"
 jsonPayload.success=false
-jsonPayload.rejection_reason="bigquery_iam_denied"
+jsonPayload.rejection_reason="dataset_not_allowed"
 ```
 
 ## Current Phase Coverage
@@ -215,4 +224,4 @@ jsonPayload.rejection_reason="bigquery_iam_denied"
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; BigQuery audit dataset export, query history UI, and project-scoped dataset allowlist are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
