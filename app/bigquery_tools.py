@@ -18,6 +18,10 @@ class ProjectNotAllowedError(ValueError):
     pass
 
 
+class UserNotAllowedError(ValueError):
+    pass
+
+
 class AccessTokenCredentials(Credentials):
     def __init__(self, token: str) -> None:
         super().__init__()
@@ -44,6 +48,13 @@ def _client(session: UserSession, project_id: str) -> bigquery.Client:
 
 def _project(args: dict[str, Any], settings: Settings) -> str:
     return str(args.get("project_id") or settings.default_project_id)
+
+
+def _enforce_user_allowed(session: UserSession, settings: Settings) -> None:
+    allowed_user_emails = settings.allowed_user_email_set
+    user_email = session.email.lower()
+    if allowed_user_emails and user_email not in allowed_user_emails:
+        raise UserNotAllowedError(f"User is not allowed by ALLOWED_USER_EMAILS: {session.email}")
 
 
 def _enforce_project_allowed(project_id: str, settings: Settings) -> None:
@@ -240,6 +251,7 @@ def call_tool(name: str, session: UserSession, args: dict[str, Any], settings: S
     handler = TOOL_HANDLERS[name]
     project_id = str(args.get("project_id") or settings.default_project_id)
     try:
+        _enforce_user_allowed(session, settings)
         _enforce_project_allowed(project_id, settings)
         result = handler(session, args, settings)
         audit_log(
@@ -254,6 +266,18 @@ def call_tool(name: str, session: UserSession, args: dict[str, Any], settings: S
         return result
     except SqlValidationError as exc:
         audit_log(user_email=session.email, tool=name, project_id=str(project_id), success=False, error=str(exc))
+        raise
+    except UserNotAllowedError as exc:
+        audit_log(
+            user_email=session.email,
+            tool=name,
+            project_id=str(project_id),
+            dataset=args.get("dataset_id"),
+            table=args.get("table_id"),
+            success=False,
+            error=str(exc),
+            extra={"rejection_reason": "user_not_allowed"},
+        )
         raise
     except ProjectNotAllowedError as exc:
         audit_log(
