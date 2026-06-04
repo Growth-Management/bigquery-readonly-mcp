@@ -139,7 +139,7 @@ See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the pre
 
 See [`docs/phase-7-ice-sh-validation.md`](docs/phase-7-ice-sh-validation.md) for the Phase 7 validation record.
 
-See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, and follow-up hardening.
+See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, and follow-up hardening. The same document includes the per-project rollout record template used to track each future rollout.
 
 ## Initial Validation On ice-sh
 
@@ -195,4 +195,4 @@ jsonPayload.project_id="ice-sh"
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS` and `ALLOWED_USER_EMAILS` enforcement plus allow/reject tests are implemented; rollout patterns, allowlist policy, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS` and `ALLOWED_USER_EMAILS` enforcement plus allow/reject tests are implemented; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
