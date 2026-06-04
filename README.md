@@ -24,7 +24,12 @@ Users should receive the minimum required IAM permissions:
 
 The server enforces readonly SQL before execution. `run_readonly_query` and `dry_run_query` only allow one `SELECT` or `WITH` statement and reject DML, DDL, `EXPORT`, `LOAD`, grants, revokes, and procedure calls.
 
-The server can also enforce an application-side project allowlist with `ALLOWED_PROJECT_IDS`. When set, tool calls for projects outside the list are rejected before any BigQuery API call is made and are recorded in audit logs with `success=false`.
+The server can also enforce application-side allowlists:
+
+- `ALLOWED_PROJECT_IDS`: when set, tool calls for projects outside the list are rejected before any BigQuery API call is made.
+- `ALLOWED_USER_EMAILS`: when set, tool calls from users outside the list are rejected before any BigQuery API call is made.
+
+Allowlist rejections are recorded in audit logs with `success=false` and a `rejection_reason`.
 
 ## MCP Tools
 
@@ -69,6 +74,7 @@ export SESSION_SECRET="replace-with-random-value"
 export ALLOWED_DOMAIN="impress.co.jp"
 export DEFAULT_PROJECT_ID="ice-sh"
 export ALLOWED_PROJECT_IDS="ice-sh"
+export ALLOWED_USER_EMAILS=""
 export MAXIMUM_BYTES_BILLED="1073741824"
 export MAX_RESULTS="1000"
 export QUERY_TIMEOUT_SECONDS="60"
@@ -189,4 +195,4 @@ jsonPayload.project_id="ice-sh"
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete for `ice-sh`
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS` enforcement and allow/reject tests are implemented; rollout patterns, allowlist policy, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS` and `ALLOWED_USER_EMAILS` enforcement plus allow/reject tests are implemented; rollout patterns, allowlist policy, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
