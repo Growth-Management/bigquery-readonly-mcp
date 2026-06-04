@@ -3,6 +3,7 @@ from typing import Any
 import time
 
 import httpx
+from google.api_core import exceptions as google_exceptions
 from google.auth.credentials import Credentials
 from google.cloud import bigquery
 
@@ -12,6 +13,13 @@ from app.sessions import UserSession
 from app.sql_guard import SqlValidationError, validate_readonly_sql
 
 BIGQUERY_API = "https://bigquery.googleapis.com/bigquery/v2"
+
+REJECTION_PROJECT_NOT_ALLOWED = "project_not_allowed"
+REJECTION_USER_NOT_ALLOWED = "user_not_allowed"
+REJECTION_SQL_NOT_ALLOWED = "sql_not_allowed"
+REJECTION_BIGQUERY_IAM_DENIED = "bigquery_iam_denied"
+REJECTION_BIGQUERY_API_ERROR = "bigquery_api_error"
+REJECTION_EXECUTION_ERROR = "execution_error"
 
 
 class ProjectNotAllowedError(ValueError):
@@ -157,6 +165,43 @@ def _rows_to_dicts(query_response: dict[str, Any]) -> list[dict[str, Any]]:
     return row_values
 
 
+def _is_bigquery_iam_denied(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 403
+    if isinstance(exc, google_exceptions.Forbidden):
+        return True
+    return False
+
+
+def _is_bigquery_api_error(exc: Exception) -> bool:
+    return isinstance(exc, (httpx.HTTPError, google_exceptions.GoogleAPICallError))
+
+
+def _failure_audit_extra(rejection_reason: str) -> dict[str, str]:
+    return {"rejection_reason": rejection_reason}
+
+
+def _audit_failure(
+    *,
+    session: UserSession,
+    tool: str,
+    project_id: str,
+    args: dict[str, Any],
+    error: Exception,
+    rejection_reason: str,
+) -> None:
+    audit_log(
+        user_email=session.email,
+        tool=tool,
+        project_id=str(project_id),
+        dataset=args.get("dataset_id"),
+        table=args.get("table_id"),
+        success=False,
+        error=str(error),
+        extra=_failure_audit_extra(rejection_reason),
+    )
+
+
 def list_projects(session: UserSession, args: dict[str, Any], settings: Settings) -> dict[str, Any]:
     project_id = _project(args, settings)
     client = _client(session, project_id)
@@ -265,40 +310,48 @@ def call_tool(name: str, session: UserSession, args: dict[str, Any], settings: S
         )
         return result
     except SqlValidationError as exc:
-        audit_log(user_email=session.email, tool=name, project_id=str(project_id), success=False, error=str(exc))
+        _audit_failure(
+            session=session,
+            tool=name,
+            project_id=project_id,
+            args=args,
+            error=exc,
+            rejection_reason=REJECTION_SQL_NOT_ALLOWED,
+        )
         raise
     except UserNotAllowedError as exc:
-        audit_log(
-            user_email=session.email,
+        _audit_failure(
+            session=session,
             tool=name,
-            project_id=str(project_id),
-            dataset=args.get("dataset_id"),
-            table=args.get("table_id"),
-            success=False,
-            error=str(exc),
-            extra={"rejection_reason": "user_not_allowed"},
+            project_id=project_id,
+            args=args,
+            error=exc,
+            rejection_reason=REJECTION_USER_NOT_ALLOWED,
         )
         raise
     except ProjectNotAllowedError as exc:
-        audit_log(
-            user_email=session.email,
+        _audit_failure(
+            session=session,
             tool=name,
-            project_id=str(project_id),
-            dataset=args.get("dataset_id"),
-            table=args.get("table_id"),
-            success=False,
-            error=str(exc),
-            extra={"rejection_reason": "project_not_allowed"},
+            project_id=project_id,
+            args=args,
+            error=exc,
+            rejection_reason=REJECTION_PROJECT_NOT_ALLOWED,
         )
         raise
     except Exception as exc:
-        audit_log(
-            user_email=session.email,
+        if _is_bigquery_iam_denied(exc):
+            rejection_reason = REJECTION_BIGQUERY_IAM_DENIED
+        elif _is_bigquery_api_error(exc):
+            rejection_reason = REJECTION_BIGQUERY_API_ERROR
+        else:
+            rejection_reason = REJECTION_EXECUTION_ERROR
+        _audit_failure(
+            session=session,
             tool=name,
-            project_id=str(project_id),
-            dataset=args.get("dataset_id"),
-            table=args.get("table_id"),
-            success=False,
-            error=str(exc),
+            project_id=project_id,
+            args=args,
+            error=exc,
+            rejection_reason=rejection_reason,
         )
         raise
