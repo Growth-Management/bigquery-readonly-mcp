@@ -27,8 +27,12 @@ The following Phase 8 controls are implemented:
 - BigQuery tool calls from users outside `ALLOWED_USER_EMAILS` are rejected before BigQuery API calls.
 - Rejected project calls are written to audit logs with `success=false` and `rejection_reason="project_not_allowed"`.
 - Rejected user calls are written to audit logs with `success=false` and `rejection_reason="user_not_allowed"`.
+- SQL guard rejections are written to audit logs with `success=false` and `rejection_reason="sql_not_allowed"`.
+- BigQuery permission-denied responses are written to audit logs with `success=false` and `rejection_reason="bigquery_iam_denied"`.
+- Other BigQuery or HTTP API failures are written to audit logs with `success=false` and `rejection_reason="bigquery_api_error"`.
+- Other internal execution failures are written to audit logs with `success=false` and `rejection_reason="execution_error"`.
 - `list_projects` is filtered to allowed projects when `ALLOWED_PROJECT_IDS` is set.
-- Unit tests cover empty allowlists, allowed project, rejected project, default-project rejection, allowed user, rejected user, and case-insensitive email matching.
+- Unit tests cover empty allowlists, allowed project, rejected project, default-project rejection, allowed user, rejected user, case-insensitive email matching, SQL guard rejection category, BigQuery IAM-denied category, BigQuery API-error category, and generic execution-error category.
 - The initial Cloud Run deployment sets `ALLOWED_PROJECT_IDS=ice-sh` and leaves `ALLOWED_USER_EMAILS` empty.
 
 ## Principles
@@ -188,7 +192,7 @@ Copy this section for each new project rollout.
 | User outside `ALLOWED_USER_EMAILS`, if configured | Rejected before BigQuery execution |  |  |
 | Unauthorized project / denied job creation | Error, not successful MCP response |  |  |
 | Audit log success case | `success=true` record present |  |  |
-| Audit log rejection case | `success=false` record present |  |  |
+| Audit log rejection case | `success=false` record present with expected `rejection_reason` |  |  |
 
 ### Rollback Plan
 
@@ -273,7 +277,7 @@ Repeat the Phase 7 validation with the target project:
 11. Project outside `ALLOWED_PROJECT_IDS` is rejected before BigQuery execution.
 12. User outside `ALLOWED_USER_EMAILS`, when configured, is rejected before BigQuery execution.
 13. Unauthorized project or denied job creation returns an error, not a successful MCP response.
-14. Cloud Logging records successful reads and failed/rejected attempts with `success`, `error`, `user_email`, `tool`, and `project_id`.
+14. Cloud Logging records successful reads and failed/rejected attempts with `success`, `error`, `rejection_reason`, `user_email`, `tool`, and `project_id`.
 
 Use a small validation table and avoid company-sensitive data in validation output.
 
@@ -290,6 +294,18 @@ Every rollout must confirm Cloud Logging receives structured audit records with:
 - `bytes_processed`
 - `success`
 - `error`
+- `rejection_reason` for failed or rejected calls
+
+`rejection_reason` values:
+
+| Value | Meaning |
+| --- | --- |
+| `project_not_allowed` | `project_id` is outside `ALLOWED_PROJECT_IDS`. |
+| `user_not_allowed` | user email is outside `ALLOWED_USER_EMAILS`. |
+| `sql_not_allowed` | SQL guard rejected a non-readonly or unsafe query. |
+| `bigquery_iam_denied` | BigQuery returned permission denied, including HTTP 403. |
+| `bigquery_api_error` | BigQuery or HTTP API failed for a non-403 API reason. |
+| `execution_error` | Internal execution failed outside the known categories. |
 
 Recommended Cloud Logging filters:
 
@@ -313,6 +329,16 @@ jsonPayload.event_type="bigquery_mcp_tool_call"
 jsonPayload.rejection_reason="user_not_allowed"
 ```
 
+```text
+jsonPayload.event_type="bigquery_mcp_tool_call"
+jsonPayload.rejection_reason="sql_not_allowed"
+```
+
+```text
+jsonPayload.event_type="bigquery_mcp_tool_call"
+jsonPayload.rejection_reason="bigquery_iam_denied"
+```
+
 ## Phase 8 Implementation Backlog
 
 | Priority | Status | Item | Purpose |
@@ -320,7 +346,7 @@ jsonPayload.rejection_reason="user_not_allowed"
 | P0 | Complete | Implement `ALLOWED_PROJECT_IDS` enforcement. | Prevent cross-project use from a shared deployment. |
 | P0 | Complete | Add tests for allowed and rejected project IDs. | Prove allowlist behavior before broad rollout. |
 | P1 | Complete | Implement optional `ALLOWED_USER_EMAILS`. | Support limited pilots and sensitive deployments. |
-| P1 | Partial | Add audit fields for rejection reason category. | Project and user allowlist rejections are categorized; SQL guard and BigQuery API errors still need structured categories. |
+| P1 | Complete | Add audit fields for rejection reason category. | Project, user, SQL guard, BigQuery IAM denied, BigQuery API error, and execution-error failures are categorized. |
 | P1 | Complete | Document per-project rollout template. | Make future rollouts repeatable. |
 | P2 | Open | Evaluate BigQuery audit dataset export. | Support retention, reporting, and dashboards beyond Cloud Logging. |
 | P2 | Open | Consider query history UI. | Give administrators a review surface without raw log browsing. |
