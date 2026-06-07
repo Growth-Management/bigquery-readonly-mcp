@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     max_results: int = Field(default=1000, alias="MAX_RESULTS")
     query_timeout_seconds: int = Field(default=60, alias="QUERY_TIMEOUT_SECONDS")
     session_ttl_seconds: int = Field(default=3600, alias="SESSION_TTL_SECONDS")
+    session_store_backend: str = Field(default="memory", alias="SESSION_STORE_BACKEND")
+    firestore_session_collection: str = Field(default="bigquery_mcp_sessions", alias="FIRESTORE_SESSION_COLLECTION")
 
     @property
     def redirect_uri(self) -> str:
