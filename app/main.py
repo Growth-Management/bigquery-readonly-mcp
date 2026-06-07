@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 
 from app.config import Settings, get_settings
 from app.mcp import handle_json_rpc
-from app.sessions import session_store
+from app.sessions import session_store_from_settings
 
 logging.basicConfig(level=logging.INFO)
 
@@ -177,7 +177,7 @@ async def oauth_callback(
         redirect.delete_cookie("oauth_state")
         return redirect
 
-    session_id = session_store.create(
+    session_id = session_store_from_settings(settings).create(
         email=email,
         access_token=token_data["access_token"],
         ttl_seconds=settings.session_ttl_seconds,
@@ -203,7 +203,7 @@ async def oauth_token(request: Request, settings: Settings = Depends(get_setting
         raise HTTPException(status_code=400, detail="Invalid authorization code")
 
     _verify_pkce(code_verifier, auth_code.get("code_challenge"), auth_code.get("code_challenge_method"))
-    session_id = session_store.create(
+    session_id = session_store_from_settings(settings).create(
         email=str(auth_code["email"]),
         access_token=str(auth_code["access_token"]),
         ttl_seconds=settings.session_ttl_seconds,
@@ -223,7 +223,7 @@ async def mcp_endpoint(
     mcp_session: str | None = Cookie(default=None),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
-    session = session_store.get(_bearer_token(authorization) or mcp_session)
+    session = session_store_from_settings(settings).get(_bearer_token(authorization) or mcp_session)
     if not session:
         raise HTTPException(status_code=401, detail="Login required at /oauth/authorize")
     payload = await request.json()
