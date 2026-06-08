@@ -60,5 +60,5 @@ jobs:
             --project "${{ secrets.GCP_PROJECT_ID }}" \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars "BASE_URL=${{ secrets.BASE_URL }},ALLOWED_DOMAIN=impress.co.jp,DEFAULT_PROJECT_ID=ice-mp,ALLOWED_PROJECT_IDS=ice-mp,ALLOWED_DATASET_IDS=,ALLOWED_USER_EMAILS=sinohara@impress.co.jp,MAXIMUM_BYTES_BILLED=1073741824,MAX_RESULTS=1000,QUERY_TIMEOUT_SECONDS=60" \
+            --set-env-vars "BASE_URL=${{ secrets.BASE_URL }},ALLOWED_DOMAIN=impress.co.jp,DEFAULT_PROJECT_ID=ice-mp,ALLOWED_PROJECT_IDS=ice-mp,ALLOWED_DATASET_IDS=,ALLOWED_USER_EMAILS=sinohara@impress.co.jp,MAXIMUM_BYTES_BILLED=1073741824,MAX_RESULTS=1000,QUERY_TIMEOUT_SECONDS=60,SESSION_STORE_BACKEND=memory,FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions" \
             --set-secrets "GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,SESSION_SECRET=bigquery-mcp-session-secret:latest"
