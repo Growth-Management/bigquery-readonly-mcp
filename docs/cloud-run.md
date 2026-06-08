@@ -26,6 +26,12 @@ gcloud services enable \
   --project ice-sh
 ```
 
+If persistent sessions are enabled, also enable Firestore:
+
+```bash
+gcloud services enable firestore.googleapis.com --project ice-sh
+```
+
 ## Artifact Registry
 
 Create a Docker repository for the Cloud Run image:
@@ -105,6 +111,47 @@ After the first deploy, update `BASE_URL` to the actual Cloud Run URL and redepl
 
 For the preferred GitHub Actions deployment path, see [`github-actions-deploy.md`](github-actions-deploy.md).
 
+## Persistent Session Storage
+
+Default behavior uses in-memory sessions:
+
+```text
+SESSION_STORE_BACKEND=memory
+FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions
+SESSION_TTL_SECONDS=3600
+```
+
+With the memory backend, an existing `mcp_session` cookie can stop working when Cloud Run creates a new instance, restarts, or deploys a new revision. This is safe but inconvenient because the user must login again.
+
+Optional persistent sessions use Firestore:
+
+```text
+SESSION_STORE_BACKEND=firestore
+FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions
+```
+
+When Firestore is enabled, only the post-login MCP session is persisted. Short-lived OAuth authorization requests and authorization codes remain in memory, so a login flow that overlaps a revision restart may still need to be retried.
+
+Security behavior:
+
+- Access tokens are encrypted before being stored in Firestore.
+- Encryption uses AES-GCM with a key derived from `SESSION_SECRET`.
+- `SESSION_SECRET` rotation intentionally invalidates existing persisted sessions.
+- Invalid or undecryptable session documents are deleted and treated as logged out.
+- Firestore persistence does not grant BigQuery access. BigQuery calls still use the logged-in user's OAuth token and IAM permissions.
+
+Enablement checklist:
+
+1. Enable `firestore.googleapis.com` in the Cloud Run deployment project.
+2. Create or confirm a Firestore database in the deployment project.
+3. Grant the Cloud Run runtime service account Firestore document read/write/delete permissions. Use `roles/datastore.user` unless a narrower custom role is available.
+4. Set `SESSION_STORE_BACKEND=firestore` on Cloud Run.
+5. Keep `FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions` unless a different collection is needed.
+6. Decide whether `SESSION_TTL_SECONDS=3600` is enough or whether a longer pilot value such as `86400` is acceptable.
+7. Login once, invoke `/mcp`, deploy or restart a revision, then invoke `/mcp` again with the same cookie to confirm the session survives.
+
+The current workflow keeps `SESSION_STORE_BACKEND=memory` until Firestore setup and restart validation are completed.
+
 ## Health Check
 
 Cloud Run reserves `/healthz` before the request reaches the container, so use `/health` for external service checks.
@@ -158,3 +205,4 @@ jsonPayload.project_id="ice-sh"
 - HTTPS endpoint is registered as OAuth redirect URI.
 - Secret values are supplied from Secret Manager.
 - Cloud Logging receives app logs from the service.
+- If Firestore sessions are enabled, a logged-in MCP session survives a Cloud Run restart or new revision until `SESSION_TTL_SECONDS` expires.
