@@ -15,7 +15,7 @@ BigQuery Readonly MCP is a FastAPI-based Custom MCP server for safely querying B
 - Default `maximumBytesBilled`: 1GB
 - Default `max_results`: 1000
 - Default query timeout: 60 seconds
-- Default session backend: in-memory, with optional Firestore persistence available
+- Current session backend: Firestore persistence enabled, with `SESSION_TTL_SECONDS=3600`
 
 ## Security Model
 
@@ -69,7 +69,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Set local environment variables. Do not commit real secrets.
+Set local environment variables. Do not commit real secrets. Local development may use `memory`; the `ice-mp` pilot deployment uses Firestore.
 
 ```bash
 export BASE_URL="http://localhost:8080"
@@ -137,27 +137,32 @@ The OAuth callback `/oauth/callback` is the Google OAuth redirect URI. MCP clien
 
 ## Session Storage
 
-The current production default is in-memory session storage:
-
-```text
-SESSION_STORE_BACKEND=memory
-SESSION_TTL_SECONDS=3600
-```
-
-This is safe for the `ice-mp` pilot, but the `mcp_session` cookie may stop working when Cloud Run restarts, creates a new instance, or deploys a new revision. In that case the user must login again.
-
-Optional Firestore-backed persistence is implemented for the post-login MCP session:
+The current `ice-mp` pilot deployment uses Firestore-backed session storage:
 
 ```text
 SESSION_STORE_BACKEND=firestore
 FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions
+SESSION_TTL_SECONDS=3600
 ```
 
-Firestore persistence encrypts access tokens before storage using AES-GCM with a key derived from `SESSION_SECRET`. Rotating `SESSION_SECRET` invalidates existing persisted sessions by design. Invalid persisted sessions are deleted and treated as logged out.
+Firestore persistence keeps a post-login MCP session available across Cloud Run instance restarts, scale-out, and new revisions. This was validated on 2026-06-08: a session document was created in Firestore, the access token was stored only as encrypted ciphertext, and the same `mcp_session` cookie continued to work after new Cloud Run revisions and GitHub Actions deploys.
 
-Firestore persistence does not change the BigQuery security model. BigQuery calls still run with the logged-in user's OAuth token and IAM permissions.
+Security behavior:
 
-Before enabling Firestore persistence, complete the checklist in [`docs/cloud-run.md`](docs/cloud-run.md): enable Firestore, grant the Cloud Run runtime service account document read/write/delete permissions, decide the TTL, set `SESSION_STORE_BACKEND=firestore`, and confirm the same session survives a Cloud Run restart or new revision.
+- Access tokens are encrypted before being stored in Firestore.
+- Encryption uses AES-GCM with a key derived from `SESSION_SECRET`.
+- `SESSION_SECRET` rotation intentionally invalidates existing persisted sessions.
+- Invalid or undecryptable session documents are deleted and treated as logged out.
+- Firestore persistence does not grant BigQuery access. BigQuery calls still use the logged-in user's OAuth token and IAM permissions.
+
+Operational limit:
+
+- The server currently stores Google access tokens, not refresh tokens.
+- Google access tokens can expire before a longer application session TTL.
+- For this reason, the production pilot pins `SESSION_TTL_SECONDS=3600`.
+- Longer sessions require refresh-token support, including encrypted refresh-token storage, expiry handling, and re-login fallback.
+
+Short-lived OAuth authorization requests and authorization codes remain in memory, so a login flow that overlaps a revision restart may still need to be retried. This does not affect already-created Firestore MCP sessions.
 
 ## Cloud Run Deployment
 
@@ -179,8 +184,9 @@ Current pilot deployment settings:
 - `MAXIMUM_BYTES_BILLED=1073741824`
 - `MAX_RESULTS=1000`
 - `QUERY_TIMEOUT_SECONDS=60`
-- `SESSION_STORE_BACKEND=memory`
+- `SESSION_STORE_BACKEND=firestore`
 - `FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions`
+- `SESSION_TTL_SECONDS=3600`
 
 Deployment is managed per GCP project. The Cloud Run deployment project is `ice-sh`; the current pilot BigQuery target project is `ice-mp`.
 
@@ -190,7 +196,7 @@ See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the pre
 
 See [`docs/phase-7-ice-sh-validation.md`](docs/phase-7-ice-sh-validation.md) for the Phase 7 validation record.
 
-See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, and follow-up hardening. The same document includes the per-project rollout record template, BigQuery audit dataset export evaluation, query history UI evaluation, and project-scoped dataset allowlist guidance.
+See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, session persistence, and follow-up hardening.
 
 ## Initial Validation On ice-sh
 
@@ -211,7 +217,7 @@ Current status as of 2026-06-04: Phase 7 validation is complete. `ice-sh` readon
 
 ## Current Pilot On ice-mp
 
-Current status as of 2026-06-04: `ice-mp` pilot operation is enabled for `sinohara@impress.co.jp` only. `ALLOWED_PROJECT_IDS=ice-mp` prevents accidental use of other projects from this deployment. `ALLOWED_DATASET_IDS` is empty, so dataset access is governed by the logged-in user's BigQuery IAM.
+Current status as of 2026-06-08: `ice-mp` pilot operation is enabled for `sinohara@impress.co.jp` only. `ALLOWED_PROJECT_IDS=ice-mp` prevents accidental use of other projects from this deployment. `ALLOWED_DATASET_IDS` is empty, so dataset access is governed by the logged-in user's BigQuery IAM. Firestore-backed MCP session persistence is enabled and validated with `SESSION_TTL_SECONDS=3600`.
 
 Before expanding beyond the initial pilot user, repeat the rollout checklist in `docs/rollout-policy.md` and decide whether `ALLOWED_DATASET_IDS` or additional named-user restrictions are needed.
 
@@ -270,7 +276,7 @@ jsonPayload.rejection_reason="project_not_allowed"
 - Phase 2: six initial BigQuery tools
 - Phase 3: readonly SQL guard, `maximumBytesBilled`, `max_results`, timeout, basic query error handling
 - Phase 4: structured JSON audit logs are emitted to stdout for Cloud Logging ingestion
-- Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, `/health` verification, and optional Firestore-backed session storage are documented for `ice-sh`
-- Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete
+- Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, `/health` verification, and Firestore-backed session storage are complete for `ice-sh`
+- Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, deploy verification, and Firestore session env pinning are complete
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; `ice-mp` pilot defaults are configured; optional Firestore-backed persistent sessions are implemented but not yet enabled; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, structured audit rejection categories, allow/reject tests, `ice-mp` pilot defaults, and Firestore-backed session persistence are implemented and validated; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, session policy, and follow-up backlog are documented in `docs/rollout-policy.md`
