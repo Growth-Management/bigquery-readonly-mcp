@@ -10,7 +10,7 @@ The `ice-sh` validation confirmed OAuth, MCP tool calls, BigQuery metadata/query
 
 The current pilot operating target is `ice-mp`, with `sinohara@impress.co.jp` as the only named pilot user.
 
-Session persistence is implemented as an optional Firestore-backed control. It is not enabled in the current workflow default yet; enable it only after Firestore, runtime IAM, TTL, and restart validation are complete.
+Firestore-backed session persistence is enabled and validated as of 2026-06-08. The current safe session TTL is `3600` seconds because the server stores Google access tokens, not refresh tokens.
 
 ## Current Pilot Rollout: ice-mp
 
@@ -38,17 +38,18 @@ Current deployment settings:
 | `MAXIMUM_BYTES_BILLED` | `1073741824` |
 | `MAX_RESULTS` | `1000` |
 | `QUERY_TIMEOUT_SECONDS` | `60` |
-| `SESSION_STORE_BACKEND` | `memory` |
+| `SESSION_STORE_BACKEND` | `firestore` |
 | `FIRESTORE_SESSION_COLLECTION` | `bigquery_mcp_sessions` |
+| `SESSION_TTL_SECONDS` | `3600` |
 
 Operational notes:
 
 - `ALLOWED_PROJECT_IDS=ice-mp` prevents accidental use of other BigQuery projects from this Cloud Run deployment.
 - `ALLOWED_USER_EMAILS=sinohara@impress.co.jp` limits the pilot to the initial user.
 - `ALLOWED_DATASET_IDS` is empty, so dataset access is governed by BigQuery IAM.
-- GitHub Actions deploy defaults are aligned with this pilot configuration, so future deploys should not revert the service to `ice-sh` defaults.
-- `SESSION_STORE_BACKEND=memory` is safe but can require re-login after Cloud Run restart, scale-out, or new revision.
-- Firestore-backed session persistence can be enabled after Firestore setup and restart validation.
+- GitHub Actions deploy defaults are aligned with this pilot configuration, including Firestore session backend and `SESSION_TTL_SECONDS=3600`.
+- Firestore-backed session persistence reduces re-login after Cloud Run restart, scale-out, and new revisions.
+- Refresh-token support is not implemented, so session TTL must not exceed the practical Google access-token lifetime for normal operation.
 - Before adding users, review BigQuery IAM and decide whether `ALLOWED_USER_EMAILS` should remain named-user restricted.
 - Before restricting datasets, set `ALLOWED_DATASET_IDS` and validate metadata allow/reject behavior.
 
@@ -59,7 +60,7 @@ The following Phase 8 controls are implemented:
 - `ALLOWED_PROJECT_IDS` environment variable.
 - `ALLOWED_DATASET_IDS` environment variable for project-scoped dataset allowlists.
 - `ALLOWED_USER_EMAILS` environment variable.
-- Optional `SESSION_STORE_BACKEND=firestore` session persistence for post-login MCP sessions.
+- Firestore-backed `SESSION_STORE_BACKEND=firestore` persistence for post-login MCP sessions.
 - BigQuery tool calls for projects outside `ALLOWED_PROJECT_IDS` are rejected before BigQuery API calls.
 - `list_datasets` is filtered to datasets inside `ALLOWED_DATASET_IDS` when configured.
 - `list_tables` and `get_table_schema` reject datasets outside `ALLOWED_DATASET_IDS` before BigQuery API calls.
@@ -88,7 +89,7 @@ The following Phase 8 controls have been evaluated but are not required for init
 - Treat application allowlists as additional restrictions only; they must never grant access beyond BigQuery IAM.
 - Keep every rollout auditable in Cloud Logging.
 - Persist sessions only when the deployment project has the required Firestore controls and the security owner accepts the session TTL.
-- Prefer reversible rollout controls: remove connector configuration, Cloud Run access, project/user/dataset allowlist entries, persistent session backend setting, or deployment resources.
+- Prefer reversible rollout controls: remove connector configuration, Cloud Run access, project/user/dataset allowlist entries, set `SESSION_STORE_BACKEND=memory`, or delete deployment resources.
 
 ## Initial Rollout Decisions
 
@@ -98,8 +99,8 @@ The following Phase 8 controls have been evaluated but are not required for init
 | Dataset allowlist | Implemented for metadata tools with `ALLOWED_DATASET_IDS`. Current pilot value: empty. | Keeps dataset access governed by BigQuery IAM unless a dataset kill switch is needed. |
 | User allowlist | Implemented with optional `ALLOWED_USER_EMAILS`. Current pilot value: `sinohara@impress.co.jp`. | Limits the initial pilot to one user. |
 | Domain allowlist | Required. Initial value: `impress.co.jp`. | Blocks non-company Google accounts before BigQuery access is attempted. |
-| Session persistence | Optional Firestore backend implemented. Current pilot value: `memory`. | Avoids re-login after Cloud Run restart once Firestore/IAM/TTL validation is complete. |
-| Per-project policy | Required. Cloud Run, Artifact Registry, Secret Manager, WIF, deploy service account, GitHub Secrets, OAuth redirect URI, health check, and optional Firestore storage must be managed per GCP project. | Keeps blast radius and deployment ownership clear. |
+| Session persistence | Firestore backend enabled and validated. Current pilot value: `firestore`, `SESSION_TTL_SECONDS=3600`. | Keeps sessions across Cloud Run revisions while staying aligned with Google access-token lifetime. |
+| Per-project policy | Required. Cloud Run, Artifact Registry, Secret Manager, WIF, deploy service account, GitHub Secrets, OAuth redirect URI, health check, and Firestore storage must be managed per GCP project. | Keeps blast radius and deployment ownership clear. |
 | BigQuery audit dataset | Evaluated. Keep Cloud Logging as the required audit source now. Add BigQuery export through a Log Router sink when retention, reporting, dashboard, or cross-project review requirements are confirmed. | Avoids storage and IAM surface before there is an operational need. |
 | Query history UI | Evaluated. Do not build for initial rollout. Consider an admin-only audit browser only after audit export and review requirements are confirmed. | Cloud Logging is enough now; UI adds auth, privacy, retention, and maintenance work. |
 | IAM Deny policy | Not required for normal operation. Use only for validation, break-glass restrictions, or explicit security boundaries. | Standard access should be governed by Google OAuth identity plus BigQuery IAM. |
@@ -116,7 +117,7 @@ Default behavior:
 - `ALLOWED_PROJECT_IDS` contains only that project and explicitly approved adjacent projects.
 - `ALLOWED_DATASET_IDS` is empty unless the rollout needs a dataset pilot boundary or kill switch.
 - `ALLOWED_USER_EMAILS` is empty unless the deployment is a named-user pilot.
-- `SESSION_STORE_BACKEND` starts as `memory`; use `firestore` after restart validation if session continuity is required.
+- `SESSION_STORE_BACKEND` may start as `memory`; use `firestore` after Firestore readiness and restart validation if session continuity is required.
 - Cloud Logging remains in the deployment project.
 
 ### Pattern B: Shared Cloud Run Deployment With Multiple Allowed Projects
@@ -128,7 +129,8 @@ Required controls:
 - Set `ALLOWED_PROJECT_IDS` for every approved project.
 - Optionally set `ALLOWED_DATASET_IDS` for dataset-level restrictions.
 - Optionally set `ALLOWED_USER_EMAILS` for named-user pilots.
-- Optionally set `SESSION_STORE_BACKEND=firestore` after Firestore readiness is confirmed.
+- Use `SESSION_STORE_BACKEND=firestore` only after Firestore readiness is confirmed.
+- Keep `SESSION_TTL_SECONDS` aligned with access-token behavior unless refresh-token support is implemented.
 - Document every allowed project, dataset, user boundary, session backend, and owner.
 - Confirm audit filters can separate project activity.
 
@@ -163,7 +165,7 @@ Current behavior:
 Implemented environment variables:
 
 ```text
-SESSION_STORE_BACKEND=memory
+SESSION_STORE_BACKEND=firestore
 FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions
 SESSION_TTL_SECONDS=3600
 ```
@@ -177,14 +179,19 @@ Current behavior:
 - Invalid persisted sessions are deleted and treated as logged out.
 - OAuth authorization requests and authorization codes remain short-lived and in-memory; a login flow interrupted by a new revision may need to be retried.
 - Session persistence does not change BigQuery authorization. BigQuery calls still run with the logged-in user's OAuth token and IAM.
+- The current implementation does not store refresh tokens. `SESSION_TTL_SECONDS=3600` is the safe pilot setting.
 
-Enable Firestore persistence only after:
+Validation completed on 2026-06-08:
 
-1. `firestore.googleapis.com` is enabled in the Cloud Run deployment project.
-2. A Firestore database exists in the deployment project.
-3. The Cloud Run runtime service account has Firestore document read/write/delete permissions, typically `roles/datastore.user` unless a narrower custom role is available.
-4. `SESSION_TTL_SECONDS` is approved for the pilot or rollout.
-5. A restart/new-revision smoke test confirms the same `mcp_session` remains usable.
+1. `firestore.googleapis.com` is enabled in `ice-sh`.
+2. Firestore database `(default)` exists in `asia-northeast1` using Firestore Native mode.
+3. Cloud Run runtime service account `635067190197-compute@developer.gserviceaccount.com` has `roles/datastore.user`.
+4. Cloud Run env is `SESSION_STORE_BACKEND=firestore`, `FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions`, `SESSION_TTL_SECONDS=3600`.
+5. Firestore collection `bigquery_mcp_sessions` created a session document with `email`, `expires_at`, `nonce`, and `access_token_ciphertext`.
+6. Access token plaintext was not stored in Firestore.
+7. The same `mcp_session` survived manual Cloud Run revision updates.
+8. The same `mcp_session` survived GitHub Actions deployment after workflow defaults were pinned to Firestore and TTL 3600.
+9. A longer TTL of `86400` was tested and exposed Google access-token expiry via BigQuery `401`; keep 3600 until refresh-token support is designed.
 
 ## BigQuery IAM Policy
 
@@ -209,7 +216,7 @@ The MCP should not compensate for excessive BigQuery IAM. If a user can query a 
 
 For every new project, create or confirm the following:
 
-1. GCP APIs are enabled: Cloud Run, Artifact Registry, Secret Manager, IAM Credentials, and Cloud Build if using manual builds.
+1. GCP APIs are enabled: Cloud Run, Artifact Registry, Secret Manager, IAM Credentials, Firestore when persistent sessions are used, and Cloud Build if using manual builds.
 2. Artifact Registry repository exists in the target region.
 3. OAuth Web application has the Cloud Run callback URL registered.
 4. Secret Manager contains `google-oauth-client-id`, `google-oauth-client-secret`, and `bigquery-mcp-session-secret`.
@@ -244,7 +251,7 @@ Repeat the Phase 7 validation with the target project:
 13. Dataset outside `ALLOWED_DATASET_IDS`, when configured, is rejected by metadata tools before BigQuery execution.
 14. Unauthorized project or denied job creation returns an error, not a successful MCP response.
 15. Cloud Logging records successful reads and failed/rejected attempts with `success`, `error`, `rejection_reason`, `user_email`, `tool`, and `project_id`.
-16. If Firestore sessions are enabled, a logged-in MCP session survives a Cloud Run restart or new revision until `SESSION_TTL_SECONDS` expires.
+16. If Firestore sessions are enabled, a logged-in MCP session survives a Cloud Run restart or new revision within the access-token-aware TTL.
 
 Use a small validation table and avoid company-sensitive data in validation output.
 
@@ -302,17 +309,17 @@ Status: evaluated in Phase 8 P2. Do not build a query history UI for the initial
 | P2 | Complete | Evaluate BigQuery audit dataset export. | Cloud Logging remains required; Log Router to BigQuery is the recommended optional path when retention/reporting requirements exist. |
 | P2 | Complete | Consider query history UI. | Not required now; defer until audit export and administrator review requirements are confirmed. |
 | P2 | Complete | Implement project-scoped dataset allowlist for metadata tools. | Optional defense-in-depth for dataset visibility and metadata access. |
-| P2 | Implemented, activation pending | Implement optional Firestore-backed session persistence. | Reduce re-login caused by Cloud Run restarts, scale-out, and new revisions. |
-| P2 | Pending | Enable and validate Firestore session persistence in Cloud Run. | Requires Firestore API/database, runtime IAM, TTL decision, deploy, and restart smoke test. |
+| P2 | Complete | Implement and enable Firestore-backed session persistence. | Reduces re-login caused by Cloud Run restarts, scale-out, and new revisions. |
+| P2 | Complete | Validate Firestore session persistence in Cloud Run. | Firestore API/database, runtime IAM, TTL 3600, deploy, and restart smoke tests are complete. |
 | Pilot | In progress | Operate `ice-mp` pilot for `sinohara@impress.co.jp`. | Start practical use with a narrow project/user boundary. |
 
 ## Follow-Up Hardening Candidates
 
 These are not required to operate the `ice-mp` pilot, but should be considered before broader use:
 
-- Decide whether additional users should remain in `ALLOWED_USER_EMAILS` or whether domain+IAM is enough.
+- Decide whether additional users should remain in `ALLOWED_USER_EMAILS` or whether domain+IAM is enough. This decision is intentionally deferred until after session persistence is stable.
 - Reliable query SQL reference extraction if dataset allowlist enforcement is ever needed for `dry_run_query` and `run_readonly_query`.
-- Enable Firestore-backed persistent sessions after Firestore/IAM/TTL/restart validation is complete.
+- Refresh-token support for sessions longer than the Google access-token lifetime, including encrypted refresh-token storage and re-login fallback.
 - Implement BigQuery audit dataset export after retention and reporting requirements are confirmed.
 - Query history UI for administrators after audit export and review requirements are confirmed.
 - Dedicated runtime service account instead of the default compute service account.
