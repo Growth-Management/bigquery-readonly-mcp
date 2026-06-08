@@ -27,6 +27,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
 
@@ -52,7 +53,7 @@ jobs:
             --region "${REGION}" \
             --format=json > /tmp/cloud-run-service.json
 
-          jq -r '.spec.template.metadata.name // ""' /tmp/cloud-run-service.json | sed 's/^/revision: /'
+          jq -r '.spec.template.metadata.name // ""' /tmp/cloud-run-service.json | sed 's/^/revision: /' | tee /tmp/cloud-run-revision.txt
 
           jq -r '
             .spec.template.spec.containers[0].env[]
@@ -104,7 +105,7 @@ jobs:
             success: .jsonPayload.success,
             rejection_reason: .jsonPayload.rejection_reason,
             error: .jsonPayload.error
-          }' /tmp/mcp-audit-logs.json
+          }' /tmp/mcp-audit-logs.json | tee /tmp/mcp-audit-summary.json
 
       - name: Check Firestore session collection visibility
         run: |
@@ -115,7 +116,7 @@ jobs:
             "https://firestore.googleapis.com/v1/projects/${{ secrets.GCP_PROJECT_ID }}/databases/(default)/documents/${EXPECTED_FIRESTORE_SESSION_COLLECTION}?pageSize=5" \
             > /tmp/firestore-sessions.json
 
-          jq '{document_count: ((.documents // []) | length), first_document_fields: ((.documents // [])[0].fields // {}) | keys}' /tmp/firestore-sessions.json
+          jq '{document_count: ((.documents // []) | length), first_document_fields: ((.documents // [])[0].fields // {}) | keys}' /tmp/firestore-sessions.json | tee /tmp/firestore-summary.json
 
       - name: Write summary
         if: always()
@@ -131,3 +132,47 @@ jobs:
             echo
             echo "This workflow does not use MCP_SESSION cookies and does not execute BigQuery as a user."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment result on issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Ops smoke check result"
+            echo
+            echo "Status: **${{ job.status }}**"
+            echo "Run: ${RUN_URL}"
+            echo
+            echo "Safety boundary: this workflow did not use MCP_SESSION and did not execute BigQuery as a user."
+            echo
+            if [[ -f /tmp/cloud-run-revision.txt ]]; then
+              echo "### Cloud Run revision"
+              echo '```text'
+              cat /tmp/cloud-run-revision.txt
+              echo '```'
+            fi
+            if [[ -f /tmp/cloud-run-env.txt ]]; then
+              echo "### Pilot environment"
+              echo '```text'
+              cat /tmp/cloud-run-env.txt
+              echo '```'
+            fi
+            if [[ -f /tmp/firestore-summary.json ]]; then
+              echo "### Firestore session collection"
+              echo '```json'
+              cat /tmp/firestore-summary.json
+              echo '```'
+            fi
+            if [[ -f /tmp/mcp-audit-summary.json ]]; then
+              echo "### Recent MCP audit logs"
+              echo '```json'
+              head -c 6000 /tmp/mcp-audit-summary.json
+              echo
+              echo '```'
+            fi
+          } > /tmp/issue-comment.md
+
+          gh issue comment "${{ github.event.issue.number }}" --body-file /tmp/issue-comment.md
