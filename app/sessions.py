@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Protocol
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.config import Settings
@@ -104,21 +105,27 @@ class FirestoreSessionStore:
     def get(self, session_id: str | None) -> UserSession | None:
         if not session_id:
             return None
-        snapshot = self._collection.document(session_id).get()
+        document = self._collection.document(session_id)
+        snapshot = document.get()
         if not snapshot.exists:
             return None
         data = snapshot.to_dict() or {}
         expires_at = float(data.get("expires_at") or 0)
         if expires_at <= time.time():
-            self._collection.document(session_id).delete()
+            document.delete()
             return None
-        access_token = self._codec.decrypt(
-            session_id=session_id,
-            nonce=str(data["nonce"]),
-            access_token_ciphertext=str(data["access_token_ciphertext"]),
-        )
+        try:
+            access_token = self._codec.decrypt(
+                session_id=session_id,
+                nonce=str(data["nonce"]),
+                access_token_ciphertext=str(data["access_token_ciphertext"]),
+            )
+            email = str(data["email"])
+        except (KeyError, ValueError, InvalidTag):
+            document.delete()
+            return None
         return UserSession(
-            email=str(data["email"]),
+            email=email,
             access_token=access_token,
             expires_at=expires_at,
         )
