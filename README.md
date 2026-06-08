@@ -15,6 +15,7 @@ BigQuery Readonly MCP is a FastAPI-based Custom MCP server for safely querying B
 - Default `maximumBytesBilled`: 1GB
 - Default `max_results`: 1000
 - Default query timeout: 60 seconds
+- Default session backend: in-memory, with optional Firestore persistence available
 
 ## Security Model
 
@@ -83,6 +84,9 @@ export ALLOWED_USER_EMAILS="sinohara@impress.co.jp"
 export MAXIMUM_BYTES_BILLED="1073741824"
 export MAX_RESULTS="1000"
 export QUERY_TIMEOUT_SECONDS="60"
+export SESSION_TTL_SECONDS="3600"
+export SESSION_STORE_BACKEND="memory"
+export FIRESTORE_SESSION_COLLECTION="bigquery_mcp_sessions"
 ```
 
 `ALLOWED_DATASET_IDS` is a comma-separated list of `project_id:dataset_id` values, for example:
@@ -131,6 +135,30 @@ For MCP clients such as ChatGPT custom connectors, this service acts as the OAut
 
 The OAuth callback `/oauth/callback` is the Google OAuth redirect URI. MCP clients should be configured with their own callback URL in the client UI when prompted; the service preserves that callback through the OAuth state and returns an authorization code to the MCP client.
 
+## Session Storage
+
+The current production default is in-memory session storage:
+
+```text
+SESSION_STORE_BACKEND=memory
+SESSION_TTL_SECONDS=3600
+```
+
+This is safe for the `ice-mp` pilot, but the `mcp_session` cookie may stop working when Cloud Run restarts, creates a new instance, or deploys a new revision. In that case the user must login again.
+
+Optional Firestore-backed persistence is implemented for the post-login MCP session:
+
+```text
+SESSION_STORE_BACKEND=firestore
+FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions
+```
+
+Firestore persistence encrypts access tokens before storage using AES-GCM with a key derived from `SESSION_SECRET`. Rotating `SESSION_SECRET` invalidates existing persisted sessions by design. Invalid persisted sessions are deleted and treated as logged out.
+
+Firestore persistence does not change the BigQuery security model. BigQuery calls still run with the logged-in user's OAuth token and IAM permissions.
+
+Before enabling Firestore persistence, complete the checklist in [`docs/cloud-run.md`](docs/cloud-run.md): enable Firestore, grant the Cloud Run runtime service account document read/write/delete permissions, decide the TTL, set `SESSION_STORE_BACKEND=firestore`, and confirm the same session survives a Cloud Run restart or new revision.
+
 ## Cloud Run Deployment
 
 The GitHub Actions workflow expects these GitHub Secrets:
@@ -151,10 +179,12 @@ Current pilot deployment settings:
 - `MAXIMUM_BYTES_BILLED=1073741824`
 - `MAX_RESULTS=1000`
 - `QUERY_TIMEOUT_SECONDS=60`
+- `SESSION_STORE_BACKEND=memory`
+- `FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions`
 
 Deployment is managed per GCP project. The Cloud Run deployment project is `ice-sh`; the current pilot BigQuery target project is `ice-mp`.
 
-See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment procedure, including required APIs, Artifact Registry, Secret Manager, manual deploy, `/health`, and Cloud Logging checks.
+See [`docs/cloud-run.md`](docs/cloud-run.md) for the full Phase 5 deployment procedure, including required APIs, Artifact Registry, Secret Manager, manual deploy, `/health`, Cloud Run session storage, and Cloud Logging checks.
 
 See [`docs/github-actions-deploy.md`](docs/github-actions-deploy.md) for the preferred GitHub Actions deployment path using Workload Identity Federation.
 
@@ -240,7 +270,7 @@ jsonPayload.rejection_reason="project_not_allowed"
 - Phase 2: six initial BigQuery tools
 - Phase 3: readonly SQL guard, `maximumBytesBilled`, `max_results`, timeout, basic query error handling
 - Phase 4: structured JSON audit logs are emitted to stdout for Cloud Logging ingestion
-- Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, and `/health` verification are complete for `ice-sh`
+- Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, `/health` verification, and optional Firestore-backed session storage are documented for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, and deploy verification are complete
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; `ice-mp` pilot defaults are configured; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, and structured audit rejection categories plus allow/reject tests are implemented; `ice-mp` pilot defaults are configured; optional Firestore-backed persistent sessions are implemented but not yet enabled; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, and follow-up backlog are documented in `docs/rollout-policy.md`
