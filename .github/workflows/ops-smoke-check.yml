@@ -13,7 +13,7 @@ env:
   REGION: asia-northeast1
   SERVICE: bigquery-readonly-mcp
   EXPECTED_DEFAULT_PROJECT_ID: ice-mp
-  EXPECTED_ALLOWED_PROJECT_IDS: ice-mp
+  EXPECTED_ALLOWED_PROJECT_IDS: ""
   EXPECTED_ALLOWED_DATASET_IDS: ""
   EXPECTED_ALLOWED_USER_EMAILS: sinohara@impress.co.jp
   EXPECTED_SESSION_STORE_BACKEND: firestore
@@ -127,7 +127,7 @@ jobs:
             echo "Issue: #${{ github.event.issue.number }}"
             echo "Service: ${SERVICE}"
             echo "Region: ${REGION}"
-            echo "Expected project: ${EXPECTED_ALLOWED_PROJECT_IDS}"
+            echo "Expected project allowlist: ${EXPECTED_ALLOWED_PROJECT_IDS:-<empty>}"
             echo "Expected session backend: ${EXPECTED_SESSION_STORE_BACKEND}"
             echo
             echo "This workflow does not use MCP_SESSION cookies and does not execute BigQuery as a user."
