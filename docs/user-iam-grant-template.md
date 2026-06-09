@@ -32,6 +32,30 @@ Recommended minimum grants:
 
 Prefer dataset-level `roles/bigquery.dataViewer`. Avoid project-wide `roles/bigquery.dataViewer` unless the project is explicitly intended for broad analysis access.
 
+## User Or Group Decision
+
+Use individual user grants when the rollout is still a short pilot, has only one or two users, or needs very explicit per-person approval.
+
+Use a dedicated Google Group when the rollout becomes recurring, has multiple users, or onboarding and offboarding should be handled without editing project or dataset IAM each time.
+
+Do not reuse broad existing groups unless every member is approved for the target BigQuery datasets. A group that already grants access to unrelated projects can accidentally expand the MCP audience or make offboarding harder to reason about.
+
+Recommended group pattern for `ice-mp`:
+
+| Purpose | Example |
+| --- | --- |
+| MCP users for the pilot project | `bigquery-mcp-ice-mp-users@impress.co.jp` |
+| Optional MCP operators/admins | `bigquery-mcp-ice-mp-admins@impress.co.jp` |
+
+Current pilot recommendation:
+
+1. Keep `sinohara@impress.co.jp` as an individual user while the pilot remains single-user.
+2. Before adding the second long-term user, create a dedicated Google Group and move BigQuery IAM grants to the group.
+3. Keep `ALLOWED_USER_EMAILS` named-user based until the security owner approves switching to IAM-only user control.
+4. If a Google Group is used while `ALLOWED_USER_EMAILS` is still set, update both the group membership and `ALLOWED_USER_EMAILS` for each newly approved user.
+
+This keeps access controlled by both layers during the pilot: application allowlist first, then each user's BigQuery IAM.
+
 ## Individual User Grant
 
 Set variables:
