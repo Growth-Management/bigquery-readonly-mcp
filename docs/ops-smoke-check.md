@@ -14,6 +14,26 @@ The ops smoke check lets the agent trigger Cloud Run and audit-log checks throug
 
 It does not use `MCP_SESSION` cookies and does not execute BigQuery as a logged-in user. User OAuth smoke tests still require the user or a dedicated validation account.
 
+## Current Status
+
+Validated on 2026-06-09 for the current `ice-mp` pilot.
+
+Validation evidence:
+
+- Issue: <https://github.com/Growth-Management/bigquery-readonly-mcp/issues/3>
+- Run: <https://github.com/Growth-Management/bigquery-readonly-mcp/actions/runs/27174332835>
+- Successful result comment: <https://github.com/Growth-Management/bigquery-readonly-mcp/issues/3#issuecomment-4654651366>
+
+Validated checks:
+
+- `GET /health` returned `{"status":"ok"}`.
+- Cloud Run environment matched the current `ice-mp` pilot values.
+- Cloud Logging `bigquery_mcp_tool_call` audit records were readable.
+- Firestore session collection was readable.
+- Firestore returned expected session document field names only: `access_token_ciphertext`, `email`, `expires_at`, and `nonce`.
+
+The validation confirmed that the agent can trigger the workflow by creating a GitHub issue and recover the result from the workflow's issue comment.
+
 ## Trigger
 
 Open a GitHub issue whose title starts with exactly:
@@ -90,7 +110,12 @@ Minimum expected permissions:
 | Cloud Logging read | `roles/logging.viewer`. |
 | Firestore document list | Firestore/Datastore read capability, e.g. `roles/datastore.viewer`. |
 
-The current deploy service account may already have Cloud Run access. Add `roles/logging.viewer` and `roles/datastore.viewer` if the workflow fails on those steps.
+The current deployment required these read-only grants on `ice-sh`:
+
+- `github-actions-bigquery-mcp@ice-sh.iam.gserviceaccount.com`: `roles/logging.viewer`, `roles/datastore.viewer`.
+- `ice-deployer@ice-sh.iam.gserviceaccount.com`: `roles/logging.viewer`, `roles/datastore.viewer`.
+
+The workflow initially failed on Cloud Logging until `roles/logging.viewer` was granted, then failed on Firestore until `roles/datastore.viewer` was granted to the actual deployment identity. Keep both identities aligned unless `GCP_DEPLOY_SERVICE_ACCOUNT` is confirmed and the unused identity is retired.
 
 ## Safety Boundary
 
