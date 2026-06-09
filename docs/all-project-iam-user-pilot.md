@@ -10,6 +10,8 @@ Security owner decision:
 
 > The approved user may use the MCP for any BigQuery project that the user can read through their own Google account IAM.
 
+Validated on 2026-06-09 with `sinohara@impress.co.jp`.
+
 ## Current Scope
 
 | Field | Value |
@@ -66,11 +68,65 @@ ALLOWED_USER_EMAILS=sinohara@impress.co.jp
 
 This means future deploys preserve the approved all-project-by-user-IAM behavior.
 
-## Validation Plan
+## Validation Results
 
-After deployment, validate with `sinohara@impress.co.jp`:
+Validated on 2026-06-09 from Cloud Shell with `sinohara@impress.co.jp`.
 
-1. Confirm Cloud Run env shows `ALLOWED_PROJECT_IDS=` and `ALLOWED_USER_EMAILS=sinohara@impress.co.jp`.
+### Cloud Run Environment
+
+Cloud Run service environment:
+
+```text
+DEFAULT_PROJECT_ID=ice-mp
+ALLOWED_PROJECT_IDS=
+ALLOWED_DATASET_IDS=
+ALLOWED_USER_EMAILS=sinohara@impress.co.jp
+SESSION_STORE_BACKEND=firestore
+SESSION_TTL_SECONDS=3600
+```
+
+Cloud Shell `jq` displayed empty env values as `null`; this is acceptable and represents an empty allowlist value in this context.
+
+### MCP Tool Calls
+
+`list_projects` returned multiple IAM-visible projects, not only `ice-mp`. Example project IDs returned:
+
+```text
+sysmgmt-cloudrun-bridge
+bq-mcp-access-denied-test-2
+bq-mcp-access-denied-test
+ice-ec-project
+jumpplus-acs-v2
+ice-magapocke-project
+ice-shinchan-project
+ice-mp
+ice-qb
+ice-sh
+jumpplus-dev
+ice-gm-202012
+mangaplus-f14c0
+jumpplus-4a5f4
+magazinepocket-961
+```
+
+`list_datasets(project_id="ice-sh")` succeeded and returned `ice-sh` datasets. This confirms `ice-sh` is no longer blocked by `ALLOWED_PROJECT_IDS`.
+
+### Audit Logs
+
+Cloud Logging showed the post-change success records:
+
+```text
+2026-06-09T03:06:19.337133Z list_projects project_id=ice-mp success=true rejection_reason=null
+2026-06-09T03:07:15.614857Z list_datasets project_id=ice-sh success=true rejection_reason=null
+```
+
+Older logs from 2026-06-08 still show `project_not_allowed` for `ice-sh`; those records predate this change and are expected historical evidence of the previous narrow pilot boundary.
+
+## Validation Plan For Future Changes
+
+After deployment, validate with the approved user:
+
+1. Confirm Cloud Run env shows `ALLOWED_PROJECT_IDS=` and `ALLOWED_USER_EMAILS=<approved user>`.
 2. Run `list_projects` and confirm it returns the user's IAM-visible projects.
 3. Run `list_datasets` for `ice-mp` and one other known authorized project.
 4. Run a small `dry_run_query` on an authorized project.
