@@ -114,8 +114,9 @@ def oauth_authorize(request: Request, settings: Settings = Depends(get_settings)
             "response_type": "code",
             "scope": " ".join(OAUTH_SCOPES),
             "state": google_state,
-            "access_type": "online",
-            "prompt": "select_account",
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": params.get("prompt") or "consent select_account",
         }
     )
     redirect = RedirectResponse(f"{GOOGLE_AUTH_URL}?{query}")
@@ -165,6 +166,8 @@ async def oauth_callback(
         auth_codes[auth_code] = {
             "email": email,
             "access_token": token_data["access_token"],
+            "refresh_token": token_data.get("refresh_token"),
+            "access_token_expires_in": token_data.get("expires_in"),
             "code_challenge": auth_request.get("code_challenge"),
             "code_challenge_method": auth_request.get("code_challenge_method"),
             "expires_at": time.time() + AUTH_CODE_TTL_SECONDS,
@@ -180,6 +183,8 @@ async def oauth_callback(
     session_id = session_store_from_settings(settings).create(
         email=email,
         access_token=token_data["access_token"],
+        refresh_token=token_data.get("refresh_token"),
+        access_token_expires_in=token_data.get("expires_in"),
         ttl_seconds=settings.session_ttl_seconds,
     )
     redirect = RedirectResponse("/health")
@@ -206,6 +211,8 @@ async def oauth_token(request: Request, settings: Settings = Depends(get_setting
     session_id = session_store_from_settings(settings).create(
         email=str(auth_code["email"]),
         access_token=str(auth_code["access_token"]),
+        refresh_token=str(auth_code["refresh_token"]) if auth_code.get("refresh_token") else None,
+        access_token_expires_in=int(auth_code["access_token_expires_in"]) if auth_code.get("access_token_expires_in") else None,
         ttl_seconds=settings.session_ttl_seconds,
     )
     return {
