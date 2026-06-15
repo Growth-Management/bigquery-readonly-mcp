@@ -18,7 +18,8 @@ env:
   EXPECTED_ALLOWED_USER_EMAILS: sinohara@impress.co.jp
   EXPECTED_SESSION_STORE_BACKEND: firestore
   EXPECTED_FIRESTORE_SESSION_COLLECTION: bigquery_mcp_sessions
-  EXPECTED_SESSION_TTL_SECONDS: "3600"
+  EXPECTED_SESSION_TTL_SECONDS: "86400"
+  EXPECTED_OAUTH_REFRESH_WINDOW_SECONDS: "300"
 
 jobs:
   ops-smoke-check:
@@ -63,7 +64,8 @@ jobs:
               or .name == "ALLOWED_USER_EMAILS"
               or .name == "SESSION_STORE_BACKEND"
               or .name == "FIRESTORE_SESSION_COLLECTION"
-              or .name == "SESSION_TTL_SECONDS")
+              or .name == "SESSION_TTL_SECONDS"
+              or .name == "OAUTH_REFRESH_WINDOW_SECONDS")
             | "\(.name)=\(.value // "")"
           ' /tmp/cloud-run-service.json | sort | tee /tmp/cloud-run-env.txt
 
@@ -85,6 +87,7 @@ jobs:
           require_env SESSION_STORE_BACKEND "${EXPECTED_SESSION_STORE_BACKEND}"
           require_env FIRESTORE_SESSION_COLLECTION "${EXPECTED_FIRESTORE_SESSION_COLLECTION}"
           require_env SESSION_TTL_SECONDS "${EXPECTED_SESSION_TTL_SECONDS}"
+          require_env OAUTH_REFRESH_WINDOW_SECONDS "${EXPECTED_OAUTH_REFRESH_WINDOW_SECONDS}"
 
       - name: Check recent MCP audit logs
         run: |
@@ -129,6 +132,7 @@ jobs:
             echo "Region: ${REGION}"
             echo "Expected project allowlist: ${EXPECTED_ALLOWED_PROJECT_IDS:-<empty>}"
             echo "Expected session backend: ${EXPECTED_SESSION_STORE_BACKEND}"
+            echo "Expected session TTL: ${EXPECTED_SESSION_TTL_SECONDS}"
             echo
             echo "This workflow does not use MCP_SESSION cookies and does not execute BigQuery as a user."
           } >> "$GITHUB_STEP_SUMMARY"
