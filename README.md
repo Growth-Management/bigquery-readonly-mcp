@@ -15,7 +15,7 @@ BigQuery Readonly MCP is a FastAPI-based Custom MCP server for safely querying B
 - Default `maximumBytesBilled`: 1GB
 - Default `max_results`: 1000
 - Default query timeout: 60 seconds
-- Current session backend: Firestore persistence enabled, with `SESSION_TTL_SECONDS=3600`
+- Current session backend: Firestore persistence enabled, refresh-token backed access-token renewal enabled, with `SESSION_TTL_SECONDS=86400`
 
 ## Security Model
 
@@ -84,7 +84,8 @@ export ALLOWED_USER_EMAILS="sinohara@impress.co.jp"
 export MAXIMUM_BYTES_BILLED="1073741824"
 export MAX_RESULTS="1000"
 export QUERY_TIMEOUT_SECONDS="60"
-export SESSION_TTL_SECONDS="3600"
+export SESSION_TTL_SECONDS="86400"
+export OAUTH_REFRESH_WINDOW_SECONDS="300"
 export SESSION_STORE_BACKEND="memory"
 export FIRESTORE_SESSION_COLLECTION="bigquery_mcp_sessions"
 ```
@@ -135,34 +136,38 @@ For MCP clients such as ChatGPT custom connectors, this service acts as the OAut
 
 The OAuth callback `/oauth/callback` is the Google OAuth redirect URI. MCP clients should be configured with their own callback URL in the client UI when prompted; the service preserves that callback through the OAuth state and returns an authorization code to the MCP client.
 
+The service requests Google OAuth with `access_type=offline`, `include_granted_scopes=true`, and consent/account selection prompts so a refresh token can be captured for Firestore-backed sessions. If Google does not return a refresh token for an existing grant, revoke the app grant from the user's Google account or reconnect with an explicit consent flow, then retry the MCP connection.
+
 ## Session Storage
 
-The current pilot deployment uses Firestore-backed session storage:
+The current pilot deployment uses Firestore-backed session storage with refresh-token backed access-token renewal:
 
 ```text
 SESSION_STORE_BACKEND=firestore
 FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions
-SESSION_TTL_SECONDS=3600
+SESSION_TTL_SECONDS=86400
+OAUTH_REFRESH_WINDOW_SECONDS=300
 ```
 
-Firestore persistence keeps a post-login MCP session available across Cloud Run instance restarts, scale-out, and new revisions. This was validated on 2026-06-08: a session document was created in Firestore, the access token was stored only as encrypted ciphertext, and the same `mcp_session` cookie continued to work after new Cloud Run revisions and GitHub Actions deploys.
+Firestore persistence keeps a post-login MCP session available across Cloud Run instance restarts, scale-out, and new revisions. This was initially validated on 2026-06-08: a session document was created in Firestore, the access token was stored only as encrypted ciphertext, and the same `mcp_session` cookie continued to work after new Cloud Run revisions and GitHub Actions deploys.
+
+As of 2026-06-15, newly created Firestore sessions can also store a Google refresh token as encrypted ciphertext. When a stored access token is within `OAUTH_REFRESH_WINDOW_SECONDS` of expiry, the server exchanges the refresh token for a new access token and updates the Firestore document. This makes the MCP session TTL independent from the roughly 1-hour Google access-token lifetime, while keeping BigQuery calls bound to the logged-in user's IAM.
 
 Security behavior:
 
-- Access tokens are encrypted before being stored in Firestore.
+- Access tokens and refresh tokens are encrypted before being stored in Firestore.
 - Encryption uses AES-GCM with a key derived from `SESSION_SECRET`.
+- Refresh-token ciphertext is bound to both the session id and token purpose.
 - `SESSION_SECRET` rotation intentionally invalidates existing persisted sessions.
-- Invalid or undecryptable session documents are deleted and treated as logged out.
+- Invalid, expired, or undecryptable session documents are deleted and treated as logged out.
+- If Google rejects a refresh-token exchange, the session is treated as logged out and the user must reconnect.
 - Firestore persistence does not grant BigQuery access. BigQuery calls still use the logged-in user's OAuth token and IAM permissions.
 
-Operational limit:
+Operational notes:
 
-- The server currently stores Google access tokens, not refresh tokens.
-- Google access tokens can expire before a longer application session TTL.
-- For this reason, the production pilot pins `SESSION_TTL_SECONDS=3600`.
-- Longer sessions require refresh-token support, including encrypted refresh-token storage, expiry handling, and re-login fallback.
-
-Short-lived OAuth authorization requests and authorization codes remain in memory, so a login flow that overlaps a revision restart may still need to be retried. This does not affect already-created Firestore MCP sessions.
+- Existing sessions created before refresh-token support may still expire at the previous access-token boundary. Reconnect once after deployment so the new session stores a refresh token.
+- The pilot `SESSION_TTL_SECONDS` is 24 hours. Increase only after confirming risk acceptance for refresh-token storage and session revocation behavior.
+- Short-lived OAuth authorization requests and authorization codes remain in memory, so a login flow that overlaps a revision restart may still need to be retried. This does not affect already-created Firestore MCP sessions.
 
 ## Cloud Run Deployment
 
@@ -186,7 +191,8 @@ Current pilot deployment settings:
 - `QUERY_TIMEOUT_SECONDS=60`
 - `SESSION_STORE_BACKEND=firestore`
 - `FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions`
-- `SESSION_TTL_SECONDS=3600`
+- `SESSION_TTL_SECONDS=86400`
+- `OAUTH_REFRESH_WINDOW_SECONDS=300`
 
 Deployment is managed per GCP project. The Cloud Run deployment project is `ice-sh`; the current default BigQuery project is `ice-mp`, but project access is governed by the logged-in user's BigQuery IAM because `ALLOWED_PROJECT_IDS` is empty.
 
@@ -199,6 +205,8 @@ See [`docs/phase-7-ice-sh-validation.md`](docs/phase-7-ice-sh-validation.md) for
 See [`docs/rollout-policy.md`](docs/rollout-policy.md) for the Phase 8 rollout policy covering rollout patterns, allowlists, per-project deployment ownership, validation, audit retention, session persistence, and follow-up hardening.
 
 See [`docs/all-project-iam-user-pilot.md`](docs/all-project-iam-user-pilot.md) for the approved pilot change that leaves project access to the named user's BigQuery IAM while keeping `ALLOWED_USER_EMAILS=sinohara@impress.co.jp`.
+
+See [`docs/session-refresh-validation.md`](docs/session-refresh-validation.md) for the refresh-token session validation plan and Cloud Shell checks.
 
 ## Initial Validation On ice-sh
 
@@ -219,7 +227,7 @@ Current status as of 2026-06-04: Phase 7 validation is complete. `ice-sh` readon
 
 ## Current Pilot
 
-Current status as of 2026-06-09: pilot operation is enabled for `sinohara@impress.co.jp` only. `ALLOWED_PROJECT_IDS` is empty after security-owner approval, so the named user may use any BigQuery project readable through their own Google account IAM. `DEFAULT_PROJECT_ID=ice-mp` keeps ordinary use oriented to the pilot project. `ALLOWED_DATASET_IDS` is empty, so dataset access is governed by the logged-in user's BigQuery IAM. Firestore-backed MCP session persistence is enabled and validated with `SESSION_TTL_SECONDS=3600`.
+Current status as of 2026-06-15: pilot operation is enabled for `sinohara@impress.co.jp` only. `ALLOWED_PROJECT_IDS` is empty after security-owner approval, so the named user may use any BigQuery project readable through their own Google account IAM. `DEFAULT_PROJECT_ID=ice-mp` keeps ordinary use oriented to the pilot project. `ALLOWED_DATASET_IDS` is empty, so dataset access is governed by the logged-in user's BigQuery IAM. Firestore-backed MCP session persistence is enabled with refresh-token renewal and `SESSION_TTL_SECONDS=86400`.
 
 Before expanding beyond the initial pilot user, repeat the rollout checklist in `docs/rollout-policy.md` and decide whether `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, or additional named-user restrictions are needed.
 
@@ -281,4 +289,4 @@ jsonPayload.rejection_reason="project_not_allowed"
 - Phase 5: Docker, env example, Secret Manager policy, Cloud Run deployment procedure, `/health` verification, and Firestore-backed session storage are complete for `ice-sh`
 - Phase 6: GitHub Actions workflow, Workload Identity Federation, IAM, GitHub Secrets, deploy verification, and Firestore session env pinning are complete
 - Phase 7: `ice-sh` OAuth, MCP, BigQuery tools, readonly guard, unauthorized-project rejection, and audit log validation are complete
-- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, structured audit rejection categories, allow/reject tests, current pilot defaults, and Firestore-backed session persistence are implemented and validated; project access is currently user-IAM-scoped for `sinohara@impress.co.jp`; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, session policy, and follow-up backlog are documented in `docs/rollout-policy.md`
+- Phase 8: `ALLOWED_PROJECT_IDS`, `ALLOWED_DATASET_IDS`, `ALLOWED_USER_EMAILS`, structured audit rejection categories, allow/reject tests, current pilot defaults, Firestore-backed session persistence, and refresh-token backed session renewal are implemented; project access is currently user-IAM-scoped for `sinohara@impress.co.jp`; BigQuery audit dataset export and query history UI are evaluated; rollout patterns, allowlist policy, per-project rollout record template, per-project validation, audit requirements, session policy, and follow-up backlog are documented in `docs/rollout-policy.md`
