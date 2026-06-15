@@ -16,7 +16,7 @@ It does not use `MCP_SESSION` cookies and does not execute BigQuery as a logged-
 
 ## Current Status
 
-Validated on 2026-06-09 for the current `ice-mp` pilot.
+Validated on 2026-06-09 for the `ice-mp` pilot. Updated on 2026-06-15 to expect refresh-backed Firestore sessions with a 24-hour MCP session TTL.
 
 Validation evidence:
 
@@ -27,10 +27,10 @@ Validation evidence:
 Validated checks:
 
 - `GET /health` returned `{"status":"ok"}`.
-- Cloud Run environment matched the current `ice-mp` pilot values.
+- Cloud Run environment matched the current pilot values.
 - Cloud Logging `bigquery_mcp_tool_call` audit records were readable.
 - Firestore session collection was readable.
-- Firestore returned expected session document field names only: `access_token_ciphertext`, `email`, `expires_at`, and `nonce`.
+- Firestore returned expected session document field names only, never token plaintext.
 
 The validation confirmed that the agent can trigger the workflow by creating a GitHub issue and recover the result from the workflow's issue comment.
 
@@ -47,23 +47,25 @@ Only `issues.opened` events with that title prefix run the job. Other issues are
 Suggested issue title:
 
 ```text
-[bigquery-mcp-ops] smoke check ice-mp pilot
+[bigquery-mcp-ops] smoke check refresh-backed session pilot
 ```
 
 Suggested issue body:
 
 ```markdown
-Run read-only ops smoke checks for the current `ice-mp` pilot.
+Run read-only ops smoke checks for the current BigQuery MCP pilot.
 
 Expected values:
 - Cloud Run deploy project: `ice-sh`
 - Cloud Run service: `bigquery-readonly-mcp`
 - Region: `asia-northeast1`
 - `DEFAULT_PROJECT_ID=ice-mp`
-- `ALLOWED_PROJECT_IDS=ice-mp`
+- `ALLOWED_PROJECT_IDS=`
+- `ALLOWED_DATASET_IDS=`
 - `ALLOWED_USER_EMAILS=sinohara@impress.co.jp`
 - `SESSION_STORE_BACKEND=firestore`
-- `SESSION_TTL_SECONDS=3600`
+- `SESSION_TTL_SECONDS=86400`
+- `OAUTH_REFRESH_WINDOW_SECONDS=300`
 ```
 
 ## Checks Performed
@@ -73,19 +75,20 @@ The workflow checks:
 1. `GET /health` returns `{"status":"ok"}`.
 2. Cloud Run has the expected pilot environment values.
 3. Recent `bigquery_mcp_tool_call` audit logs are readable from Cloud Logging.
-4. Firestore session collection can be read and exposes only expected document field names in logs.
+4. Firestore session collection can be read and exposes only document field names in logs.
 
 Expected Cloud Run values:
 
 | Variable | Expected value |
 | --- | --- |
 | `DEFAULT_PROJECT_ID` | `ice-mp` |
-| `ALLOWED_PROJECT_IDS` | `ice-mp` |
+| `ALLOWED_PROJECT_IDS` | empty |
 | `ALLOWED_DATASET_IDS` | empty |
 | `ALLOWED_USER_EMAILS` | `sinohara@impress.co.jp` |
 | `SESSION_STORE_BACKEND` | `firestore` |
 | `FIRESTORE_SESSION_COLLECTION` | `bigquery_mcp_sessions` |
-| `SESSION_TTL_SECONDS` | `3600` |
+| `SESSION_TTL_SECONDS` | `86400` |
+| `OAUTH_REFRESH_WINDOW_SECONDS` | `300` |
 
 ## Required GitHub Secrets
 
@@ -131,7 +134,7 @@ This workflow must remain read-only:
 Successful run means:
 
 - Cloud Run is alive.
-- The deployed environment matches the current `ice-mp` pilot values.
+- The deployed environment matches the current pilot values.
 - Cloud Logging audit records are readable.
 - Firestore session collection is reachable.
 
@@ -139,6 +142,8 @@ It does not prove:
 
 - Google OAuth login succeeds for a user.
 - A user can run `list_datasets` through MCP.
+- A user can run `run_readonly_query` through MCP.
+- Access-token refresh works after the 1-hour Google access-token lifetime.
 - BigQuery IAM is correct for a user.
 
 Those still require a user-side MCP smoke test or a dedicated validation account.
