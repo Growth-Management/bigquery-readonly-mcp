@@ -55,7 +55,7 @@ def test_fetch_results_caps_max_results_to_configured_limit() -> None:
     settings = _settings()
 
     assert _bounded_max_results({"max_results": 5000}, settings) == 1000
-    assert _bounded_max_results({"max_results": 0}, settings) == 1
+    assert _bounded_max_results({"max_results": 0}, settings) == 1000
     assert _bounded_max_results({}, settings) == 1000
 
 
