@@ -113,6 +113,18 @@ Inputs:
 - `bigquery.tables.getData`
 - `bigquery.tables.get`
 
+## OAuth Scope
+
+`jobs.insert` requires a BigQuery OAuth scope such as `https://www.googleapis.com/auth/bigquery`; `https://www.googleapis.com/auth/bigquery.readonly` is enough for the existing synchronous `jobs.query` path but not for starting asynchronous jobs through `jobs.insert`.
+
+Readonly behavior is therefore enforced by the MCP SQL guard and user IAM, not by relying on the narrower OAuth scope alone:
+
+- The MCP rejects non-`SELECT` / non-`WITH` SQL before BigQuery is called.
+- BigQuery jobs still run with the logged-in user's IAM permissions.
+- Users should receive `roles/bigquery.jobUser` and dataset-scoped `roles/bigquery.dataViewer`, not broad data editor roles.
+
+Reference: https://docs.cloud.google.com/bigquery/docs/reference/rest/v2/jobs/insert
+
 Future destination-table or temporary-table workflows would require separate review before adding permissions such as:
 
 - `bigquery.tables.create`
