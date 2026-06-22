@@ -1,0 +1,87 @@
+name: Deploy Cloud Run
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  REGION: asia-northeast1
+  SERVICE_NAME: bigquery-readonly-mcp
+  ARTIFACT_REPOSITORY: bigquery-readonly-mcp
+  IMAGE_NAME: bigquery-readonly-mcp
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          SESSION_SECRET: test-session-secret
+          GOOGLE_OAUTH_CLIENT_ID: test-client-id
+          GOOGLE_OAUTH_CLIENT_SECRET: test-client-secret
+        run: pytest
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA}"
+          echo "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build -t "${IMAGE}" .
+          docker push "${IMAGE}"
+
+      - name: Deploy to Cloud Run
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          BASE_URL: ${{ secrets.BASE_URL }}
+        run: |
+          gcloud run deploy "${SERVICE_NAME}" \
+            --image "${IMAGE}" \
+            --region "${REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-env-vars "BASE_URL=${BASE_URL},ALLOWED_DOMAIN=impress.co.jp,DEFAULT_PROJECT_ID=ice-mp,ALLOWED_PROJECT_IDS=,ALLOWED_DATASET_IDS=,ALLOWED_USER_EMAILS=sinohara@impress.co.jp,MAXIMUM_BYTES_BILLED=1073741824,MAX_RESULTS=1000,QUERY_TIMEOUT_SECONDS=60,SESSION_STORE_BACKEND=firestore,FIRESTORE_SESSION_COLLECTION=bigquery_mcp_sessions,SESSION_TTL_SECONDS=86400,OAUTH_REFRESH_WINDOW_SECONDS=300" \
+            --set-secrets "GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,SESSION_SECRET=bigquery-mcp-session-secret:latest"
+
+      - name: Check health endpoint
+        env:
+          BASE_URL: ${{ secrets.BASE_URL }}
+        run: |
+          curl -fsS "${BASE_URL%/}/health"
