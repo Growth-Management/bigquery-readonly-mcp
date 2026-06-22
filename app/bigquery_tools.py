@@ -141,6 +141,44 @@ def _job_labels(value: Any) -> dict[str, str]:
     return {str(key): str(label_value) for key, label_value in value.items() if label_value is not None}
 
 
+def _referenced_tables_from_job(job: dict[str, Any]) -> list[dict[str, str]]:
+    query_stats = ((job.get("statistics") or {}).get("query")) or {}
+    referenced_tables: list[dict[str, str]] = []
+    for table in query_stats.get("referencedTables") or []:
+        project_id = table.get("projectId")
+        dataset_id = table.get("datasetId")
+        table_id = table.get("tableId")
+        if not project_id or not dataset_id or not table_id:
+            continue
+        referenced_tables.append(
+            {
+                "project_id": str(project_id),
+                "dataset_id": str(dataset_id),
+                "table_id": str(table_id),
+                "full_table_id": f"{project_id}.{dataset_id}.{table_id}",
+            }
+        )
+    return referenced_tables
+
+
+def _single_referenced_table(result: dict[str, Any]) -> dict[str, str] | None:
+    referenced_tables = result.get("referenced_tables") or []
+    if len(referenced_tables) != 1 or not isinstance(referenced_tables[0], dict):
+        return None
+    return referenced_tables[0]
+
+
+def _success_audit_extra(result: dict[str, Any]) -> dict[str, Any] | None:
+    extra: dict[str, Any] = {}
+    if result.get("job_id"):
+        extra["job_id"] = result["job_id"]
+    referenced_tables = result.get("referenced_tables") or []
+    if referenced_tables:
+        extra["referenced_tables"] = referenced_tables
+        extra["referenced_table_count"] = len(referenced_tables)
+    return extra or None
+
+
 def _api_error_payload(response: httpx.Response) -> dict[str, Any]:
     try:
         body = response.json()
@@ -250,6 +288,7 @@ def _job_summary(job: dict[str, Any]) -> dict[str, Any]:
     status = job.get("status") or {}
     statistics = job.get("statistics") or {}
     query_stats = statistics.get("query") or {}
+    referenced_tables = _referenced_tables_from_job(job)
     return {
         "job_id": job_ref.get("jobId"),
         "project_id": job_ref.get("projectId"),
@@ -261,6 +300,8 @@ def _job_summary(job: dict[str, Any]) -> dict[str, Any]:
         "total_bytes_processed": int(query_stats.get("totalBytesProcessed") or 0),
         "total_bytes_billed": int(query_stats.get("totalBytesBilled") or 0),
         "cache_hit": query_stats.get("cacheHit"),
+        "referenced_tables": referenced_tables,
+        "referenced_table_count": len(referenced_tables),
         "errorResult": status.get("errorResult"),
         "errors": status.get("errors", []),
     }
@@ -491,6 +532,14 @@ def fetch_query_job_results(session: UserSession, args: dict[str, Any], settings
         settings,
         params=_job_result_params(args, settings),
     )
+    job = _request_json(
+        "GET",
+        f"{BIGQUERY_API}/projects/{project_id}/jobs/{args['job_id']}",
+        session,
+        settings,
+        params=_job_location_params(args),
+    )
+    job_summary = _job_summary(job)
     row_values = _rows_to_dicts(query_response)
     return {
         "project_id": project_id,
@@ -501,6 +550,10 @@ def fetch_query_job_results(session: UserSession, args: dict[str, Any], settings
         "total_rows": int(query_response.get("totalRows") or len(row_values)),
         "returned_rows": len(row_values),
         "job_complete": bool(query_response.get("jobComplete", False)),
+        "total_bytes_processed": job_summary.get("total_bytes_processed"),
+        "total_bytes_billed": job_summary.get("total_bytes_billed"),
+        "referenced_tables": job_summary.get("referenced_tables", []),
+        "referenced_table_count": job_summary.get("referenced_table_count", 0),
         "errorResult": query_response.get("errorResult"),
         "errors": query_response.get("errors", []),
     }
@@ -544,15 +597,22 @@ def call_tool(name: str, session: UserSession, args: dict[str, Any], settings: S
         _enforce_user_allowed(session, settings)
         _enforce_project_allowed(project_id, settings)
         result = handler(session, args, settings)
+        audit_dataset = args.get("dataset_id")
+        audit_table = args.get("table_id")
+        single_referenced_table = _single_referenced_table(result)
+        if single_referenced_table and not audit_dataset:
+            audit_dataset = single_referenced_table.get("dataset_id")
+        if single_referenced_table and not audit_table:
+            audit_table = single_referenced_table.get("table_id")
         audit_log(
             user_email=session.email,
             tool=name,
             project_id=str(project_id),
-            dataset=args.get("dataset_id"),
-            table=args.get("table_id"),
+            dataset=audit_dataset,
+            table=audit_table,
             bytes_processed=result.get("total_bytes_processed"),
             success=True,
-            extra={"job_id": result.get("job_id")} if result.get("job_id") else None,
+            extra=_success_audit_extra(result),
         )
         return result
     except SqlValidationError as exc:
