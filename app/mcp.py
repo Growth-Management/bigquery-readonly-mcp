@@ -48,7 +48,11 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "required": ["sql"],
-            "properties": {"project_id": {"type": "string"}, "sql": {"type": "string"}},
+            "properties": {
+                "project_id": {"type": "string"},
+                "sql": {"type": "string"},
+                "maximum_bytes_billed": {"type": "integer", "minimum": 1},
+            },
         },
     },
     {
@@ -61,6 +65,68 @@ TOOLS = [
                 "project_id": {"type": "string"},
                 "sql": {"type": "string"},
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 1000},
+            },
+        },
+    },
+    {
+        "name": "start_readonly_query_job",
+        "description": (
+            "Start a BigQuery Job API query for a readonly SELECT/WITH query. "
+            "Use this for longer validation queries that should run as jobs instead of the synchronous query endpoint. "
+            "When dry_run=true, returns a dry-run estimate without creating a job."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["sql"],
+            "properties": {
+                "project_id": {"type": "string"},
+                "sql": {"type": "string"},
+                "location": {"type": "string"},
+                "maximum_bytes_billed": {"type": "integer", "minimum": 1},
+                "job_labels": {"type": "object", "additionalProperties": {"type": "string"}},
+                "dry_run": {"type": "boolean", "default": False},
+                "use_query_cache": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "get_query_job_status",
+        "description": "Get BigQuery query job state, timings, bytes, cache hit, errorResult, and errors.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "project_id": {"type": "string"},
+                "job_id": {"type": "string"},
+                "location": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "fetch_query_job_results",
+        "description": "Fetch one bounded page of BigQuery query job results with schema, rows, and next_page_token.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "project_id": {"type": "string"},
+                "job_id": {"type": "string"},
+                "location": {"type": "string"},
+                "page_token": {"type": "string"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 1000},
+            },
+        },
+    },
+    {
+        "name": "cancel_query_job",
+        "description": "Cancel a BigQuery query job started by the authenticated user's permissions.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "project_id": {"type": "string"},
+                "job_id": {"type": "string"},
+                "location": {"type": "string"},
             },
         },
     },

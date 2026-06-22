@@ -22,7 +22,7 @@ OAUTH_SCOPES = [
     "openid",
     "email",
     "profile",
-    "https://www.googleapis.com/auth/bigquery.readonly",
+    "https://www.googleapis.com/auth/bigquery",
 ]
 AUTH_REQUEST_TTL_SECONDS = 600
 AUTH_CODE_TTL_SECONDS = 600
